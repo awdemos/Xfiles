@@ -1,0 +1,56 @@
+[package]
+name = "xfiles"
+version = "0.1.0"
+edition = "2021"
+authors = ["xfiles contributors"]
+description = "Plan 9-inspired agent communication hub with quantum-mode AI routing"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["full", "rt-multi-thread"] }
+tokio-tungstenite = "0.24"
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "timeout"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dashmap = "6"
+rand = "0.8"
+rand_distr = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+anyhow = "1"
+thiserror = "1"
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+prometheus = "0.13"
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"
+regex = "1"
+async-trait = "0.1"
+parking_lot = "0.12"
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "migrate", "uuid", "chrono"] }
+bollard = "0.17"
+rmp-serde = "1.1"
+bytes = "1"
+opentelemetry = "0.23"
+opentelemetry_sdk = { version = "0.23", features = ["rt-tokio"] }
+opentelemetry-otlp = "0.16"
+tracing-opentelemetry = "0.24"
+rustls = "0.23"
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+
+[[example]]
+name = "ws_client"
+required-features = []
+
+[dev-dependencies]
+tokio-test = "0.4"
+tower = { version = "0.4", features = ["util"] }
+clap = { version = "4", features = ["derive"] }

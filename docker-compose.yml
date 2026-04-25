@@ -1,0 +1,18 @@
+services:
+  xfiles:
+    build: .
+    container_name: xfiles
+    ports:
+      - "9999:9999"
+    environment:
+      - RUST_LOG=xfiles=debug
+      - XFILES_BIND=0.0.0.0:9999
+    volumes:
+      - ./xfiles.toml:/etc/xfiles/xfiles.toml:ro
+    restart: unless-stopped
+    networks:
+      - xfiles-net
+
+networks:
+  xfiles-net:
+    driver: bridge
