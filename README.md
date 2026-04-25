@@ -6,6 +6,8 @@ Xfiles is a Rust-based infrastructure node that sits between your agents and AI 
 
 Inspired by [quantum biology](https://en.wikipedia.org/wiki/Quantum_biology) and xenobots as proposed by Dr. Michael Levin.
 
+It is designed as a testbed for quantum biology experiments and a production-grade implementation of modern Plan 9 protocol primitives for the expressed purpose of multi-agent communication.
+
 ---
 
 ## What It Does
