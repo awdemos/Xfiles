@@ -37,7 +37,7 @@ impl RateLimiter {
         let window = Duration::from_secs(self.window_secs);
 
         let mut entry = self.buckets.entry(key.to_string()).or_insert_with(|| TokenBucket {
-            tokens: self.max_requests.saturating_sub(1),
+            tokens: self.max_requests,
             last_refill: now,
         });
 

@@ -1,4 +1,4 @@
-use opentelemetry::trace::TracerProvider;
+use opentelemetry::trace::TraceContextExt;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::runtime::Tokio;
 use tracing_subscriber::layer::SubscriberExt;
@@ -45,7 +45,6 @@ pub fn init_telemetry(service_name: &str) -> Option<()> {
 pub fn trace_context_from_headers(
     headers: &std::collections::HashMap<String, String>,
 ) -> Option<opentelemetry::trace::SpanContext> {
-    use opentelemetry::trace::TraceContextExt;
     let trace_id = headers.get("x-trace-id")?;
     let span_id = headers.get("x-span-id")?;
 

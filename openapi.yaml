@@ -1,0 +1,377 @@
+openapi: 3.1.0
+info:
+  title: Xfiles Hub API
+  description: Plan 9-inspired agent communication hub with quantum-mode AI routing
+  version: 0.1.0
+servers:
+  - url: http://localhost:9999
+    description: Local development server
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: Hub is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      responses:
+        "200":
+          description: Prometheus text format metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+  /agents:
+    get:
+      summary: List connected agents
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        hostname: { type: string }
+                        namespace: { type: string }
+                        connected_at: { type: string, format: date-time }
+                        last_heartbeat: { type: string, format: date-time }
+  /endpoints:
+    get:
+      summary: List AI endpoints
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of endpoints
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpoints:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
+                        url: { type: string }
+                        endpoint_type: { type: string }
+                        health:
+                          type: object
+                          properties:
+                            status: { type: string }
+                            last_checked: { type: string, format: date-time }
+                            latency_ms: { type: integer }
+                            consecutive_failures: { type: integer }
+                        tags:
+                          type: array
+                          items: { type: string }
+  /mcp/tools:
+    get:
+      summary: List discovered MCP tools
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: MCP tools
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tools:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        endpoint_id: { type: string }
+                        name: { type: string }
+                        description: { type: string }
+                        input_schema: { type: object }
+  /fs/{path}:
+    get:
+      summary: Read VFS file or directory
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: File contents or directory listing
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      path: { type: string }
+                      data: { type: string }
+                  - type: object
+                    properties:
+                      path: { type: string }
+                      type: { type: string, example: dir }
+                      children:
+                        type: array
+                        items: { type: string }
+        "404":
+          description: Not found
+    post:
+      summary: Write VFS file
+      parameters:
+        - name: path
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          text/plain:
+            schema: { type: string }
+      responses:
+        "200":
+          description: Written successfully
+        "400":
+          description: Bad request (e.g. writing to directory)
+  /msg:
+    post:
+      summary: Send a message
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Message"
+      responses:
+        "200":
+          description: Message routed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+  /v1/chat/completions:
+    post:
+      summary: OpenAI-compatible chat completions
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model: { type: string }
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role: { type: string }
+                      content: { type: string }
+                stream: { type: boolean }
+                temperature: { type: number }
+                max_tokens: { type: integer }
+      responses:
+        "200":
+          description: Chat completion or stream
+  /v1/models:
+    get:
+      summary: List available models
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Models list
+  /quantum/state:
+    get:
+      summary: Quantum router diagnostics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Quantum state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  conversation_count: { type: integer }
+                  conversations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        conversation_id: { type: string, format: uuid }
+                        endpoints:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              endpoint_id: { type: string }
+                              probability: { type: number }
+                              pulls: { type: integer }
+                              avg_reward: { type: number }
+  /quantum/feedback:
+    post:
+      summary: Submit routing feedback
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FeedbackEvent"
+      responses:
+        "200":
+          description: Feedback observed
+  /circuit/state:
+    get:
+      summary: Circuit breaker diagnostics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Circuit states
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  circuits:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        endpoint_id: { type: string }
+                        state: { type: string, enum: [closed, open, half_open] }
+                        failures: { type: integer }
+  /conversations:
+    get:
+      summary: List conversations
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        conversation_id: { type: string, format: uuid }
+                        message_count: { type: integer }
+  /conversations/{id}/messages:
+    get:
+      summary: Get messages by conversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Message"
+  /grpc:
+    post:
+      summary: gRPC-style msgpack RPC
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/x-msgpack:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: Msgpack response
+          content:
+            application/x-msgpack:
+              schema: { type: string, format: binary }
+  /ws/{agent_id}:
+    get:
+      summary: Agent WebSocket connection
+      parameters:
+        - name: agent_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "101":
+          description: WebSocket upgrade
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Message:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        parent_id: { type: string, format: uuid, nullable: true }
+        conversation_id: { type: string, format: uuid }
+        timestamp: { type: string, format: date-time }
+        sender: { type: string }
+        sender_ns: { type: string }
+        path: { type: string }
+        msg_type: { type: string }
+        data: { type: object }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+    MessageResponse:
+      type: object
+      properties:
+        message_id: { type: string, format: uuid }
+        status: { type: string }
+        routed_to:
+          type: array
+          items: { type: string }
+        explanation: { type: string, nullable: true }
+        latency_ms: { type: integer }
+    FeedbackEvent:
+      type: object
+      properties:
+        message_id: { type: string, format: uuid }
+        endpoint_id: { type: string }
+        success: { type: boolean }
+        latency_ms: { type: integer }
+        quality_score: { type: number, nullable: true }
+        error_kind: { type: string, nullable: true }
+        metadata: { type: object, nullable: true }
