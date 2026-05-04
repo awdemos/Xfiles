@@ -13,6 +13,8 @@ use crate::proxy::{chat_completions_handler, list_models_handler, ProxyState};
 use crate::quantum::QuantumRouter;
 use crate::queue::MessageQueue;
 use crate::ratelimit::{RateLimiter, rate_limit_middleware};
+use crate::router::{RoutingPipeline, default_pipeline};
+use crate::state::StateManager;
 use crate::store::Store;
 use axum::{
     body::Body,
@@ -37,13 +39,10 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// Shared application state for HTTP handlers.
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub transport: Arc<TransportState>,
-    pub endpoints: Arc<DashMap<String, AiEndpoint>>,
-    pub config: Arc<Config>,
-    pub store: Option<Arc<Store>>,
+    pub state_manager: StateManager,
+    pub pipeline: Arc<RoutingPipeline>,
     pub proxy: Arc<ProxyState>,
-    pub mcp: Arc<McpRegistry>,
-    pub queue: Arc<MessageQueue>,
+    pub transport: Arc<TransportState>,
 }
 
 /// Build and run the Xfiles daemon.
@@ -64,17 +63,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     // Metrics
     let _recorder_handle = PrometheusBuilder::new().install_recorder().ok();
 
-    // SQLite store
-    let store = match Store::new(&config.hub.database_url).await {
-        Ok(s) => {
-            tracing::info!("SQLite store initialized at {}", config.hub.database_url);
-            Some(Arc::new(s))
-        }
-        Err(e) => {
-            tracing::warn!("SQLite store failed to initialize: {}. Running without persistence.", e);
-            None
-        }
-    };
+    // SQLite store - now required for data integrity
+    let store = Arc::new(Store::new(&config.hub.database_url).await.map_err(|e| {
+        anyhow::anyhow!("SQLite store failed to initialize: {}. Persistence is required.", e)
+    })?);
+    tracing::info!("SQLite store initialized at {}", config.hub.database_url);
 
     // Core components
     let vfs = VfsRegistry::new();
@@ -120,14 +113,6 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         None
     };
 
-    let transport = Arc::new(TransportState {
-        agents: agents.clone(),
-        vfs: vfs.clone(),
-        plumber: plumber.clone(),
-        quantum: quantum.clone(),
-        queue: queue.clone(),
-    });
-
     // Circuit breaker
     let circuit = if config.circuit.enabled {
         Some(Arc::new(CircuitBreaker::new(
@@ -138,6 +123,41 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     } else {
         None
     };
+
+    let event_sink = Arc::new(crate::event::StoreEventSink::new(store.clone()));
+    let emitter = Arc::new(crate::event::TracingEventEmitter::new(Some(event_sink)));
+
+    // Build unified state manager
+    let state_manager = StateManager::new(
+        agents.clone(),
+        endpoints.clone(),
+        vfs.clone(),
+        plumber.clone(),
+        quantum.clone(),
+        queue.clone(),
+        store.clone(),
+        mcp.clone(),
+        circuit.clone(),
+        Arc::new(config.clone()),
+        emitter,
+    );
+
+    // Build unified routing pipeline
+    let pipeline = Arc::new(default_pipeline(
+        mcp.clone(),
+        plumber.clone(),
+        quantum.clone(),
+        circuit.clone(),
+        endpoints.clone(),
+    ));
+
+    let transport = Arc::new(TransportState {
+        agents: agents.clone(),
+        vfs: vfs.clone(),
+        plumber: plumber.clone(),
+        quantum: quantum.clone(),
+        queue: queue.clone(),
+    });
 
     let proxy = Arc::new(ProxyState {
         endpoints: endpoints.clone(),
@@ -151,13 +171,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     });
 
     let app_state = AppState {
-        transport: transport.clone(),
-        endpoints: endpoints.clone(),
-        config: Arc::new(config.clone()),
-        store: store.clone(),
+        state_manager: state_manager.clone(),
+        pipeline: pipeline.clone(),
         proxy: proxy.clone(),
-        mcp: mcp.clone(),
-        queue: queue.clone(),
+        transport: transport.clone(),
     };
 
     // Auth config
@@ -171,6 +188,9 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         config.rate_limit.max_requests,
         config.rate_limit.window_secs,
     ));
+
+    // Unified API v1 router
+    let api_router = crate::api::build_router(app_state.clone());
 
     // Build router
     let mut app = Router::new()
@@ -191,6 +211,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .route("/conversations/:id/messages", get(conversation_messages_handler))
         .route("/conversations/:id/quantum-state", get(conversation_quantum_handler))
         .route("/ws/{agent_id}", get(ws_handler_wrapped))
+        .nest("/api/v1", api_router)
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower_http::timeout::TimeoutLayer::new(Duration::from_secs(30)))
@@ -412,7 +433,7 @@ async fn fs_read_handler(
     State(state): State<AppState>,
     Path(path): Path<String>,
 ) -> impl IntoResponse {
-    let vfs = &state.transport.vfs;
+    let vfs = state.state_manager.vfs();
     if let Some(node) = vfs.get(&path) {
         if node.is_dir() {
             let children = vfs.list(&path);
@@ -431,7 +452,7 @@ async fn fs_write_handler(
     Path(path): Path<String>,
     body: String,
 ) -> impl IntoResponse {
-    let vfs = &state.transport.vfs;
+    let vfs = state.state_manager.vfs();
     if let Some(node) = vfs.get(&path) {
         if node.is_dir() {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "cannot write to directory", "path": path })));
@@ -449,44 +470,26 @@ async fn msg_handler(
     State(state): State<AppState>,
     Json(msg): Json<crate::message::Message>,
 ) -> impl IntoResponse {
-    // Persist message if store available
-    if let Some(ref store) = state.store {
-        let store = store.clone();
-        let msg_clone = msg.clone();
-        tokio::spawn(async move {
-            let _ = store.insert_message(&msg_clone).await;
-        });
-    }
+    let store = state.state_manager.store().clone();
+    let msg_clone = msg.clone();
+    tokio::spawn(async move {
+        let _ = store.insert_message(&msg_clone).await;
+    });
 
-    // MCP tool routing takes precedence for mcp_tool_call messages
-    let selected = if msg.msg_type == "mcp_tool_call" {
-        let tool_name = msg
-            .data
-            .get("tool")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        state.mcp.find_endpoint_for_tool(tool_name).cloned()
-    } else {
-        let destinations = state.transport.plumber.route(&msg);
-        if let Some(ref q) = state.transport.quantum {
-            q.route(&msg, &destinations).await
-        } else {
-            destinations.first().cloned()
-        }
-    };
+    let decision = state.pipeline.route(&msg).await;
 
     // Try to deliver; if target agent is offline, queue it
-    if let Some(ref dest) = selected {
+    if let Some(ref dest) = decision.selected {
         if dest.starts_with("/net/") {
             let parts: Vec<&str> = dest.split('/').collect();
             if parts.len() >= 3 {
                 let target_agent = parts[2];
-                if let Some(target) = state.transport.agents.get(target_agent) {
+                if let Some(target) = state.state_manager.agents().get(target_agent) {
                     if let Some(target_tx) = target.tx {
                         let _ = target_tx.send(crate::net::protocol::ProtocolOp::Message { msg: msg.clone() });
                     }
                 } else {
-                    state.queue.enqueue(target_agent, msg.clone());
+                    state.state_manager.queue().enqueue(target_agent, msg.clone());
                 }
             }
         }
@@ -495,8 +498,8 @@ async fn msg_handler(
     let resp = crate::message::MessageResponse {
         message_id: msg.id,
         status: crate::message::DispatchStatus::Routed,
-        routed_to: selected.into_iter().collect(),
-        explanation: Some(format!("plumber matched {} rules", state.transport.plumber.route(&msg).len())),
+        routed_to: decision.selected.into_iter().collect(),
+        explanation: Some(decision.explanation),
         latency_ms: 0,
     };
 
@@ -506,37 +509,38 @@ async fn msg_handler(
 async fn quantum_state_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    if let Some(ref q) = state.transport.quantum {
-        let diagnostics = q.all_diagnostics();
-        let conversations: Vec<serde_json::Value> = diagnostics
-            .into_iter()
-            .map(|(id, eps)| {
-                serde_json::json!({
-                    "conversation_id": id,
-                    "endpoints": eps.iter().map(|(ep, prob, pulls, avg)| {
-                        serde_json::json!({
-                            "endpoint_id": ep,
-                            "probability": prob,
-                            "pulls": pulls,
-                            "avg_reward": avg,
-                        })
-                    }).collect::<Vec<_>>(),
+    match state.state_manager.quantum() {
+        Some(q) => {
+            let diagnostics = q.all_diagnostics();
+            let conversations: Vec<serde_json::Value> = diagnostics
+                .into_iter()
+                .map(|(id, eps)| {
+                    serde_json::json!({
+                        "conversation_id": id,
+                        "endpoints": eps.iter().map(|(ep, prob, pulls, avg)| {
+                            serde_json::json!({
+                                "endpoint_id": ep,
+                                "probability": prob,
+                                "pulls": pulls,
+                                "avg_reward": avg,
+                            })
+                        }).collect::<Vec<_>>(),
+                    })
                 })
-            })
-            .collect();
-        (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "status": "active",
-                "conversation_count": q.conversation_count(),
-                "conversations": conversations,
-            })),
-        )
-    } else {
-        (
+                .collect();
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "active",
+                    "conversation_count": q.conversation_count(),
+                    "conversations": conversations,
+                })),
+            )
+        }
+        None => (
             StatusCode::OK,
             Json(serde_json::json!({ "status": "disabled" })),
-        )
+        ),
     }
 }
 
@@ -557,26 +561,24 @@ async fn quantum_feedback_handler(
     State(state): State<AppState>,
     Json(feedback): Json<crate::message::FeedbackEvent>,
 ) -> impl IntoResponse {
-    if let Some(ref q) = state.transport.quantum {
-        q.observe(
-            feedback.message_id,
-            &feedback.endpoint_id,
-            feedback.success,
-            feedback.latency_ms,
-        );
+    match state.state_manager.quantum() {
+        Some(q) => {
+            q.observe(
+                feedback.message_id,
+                &feedback.endpoint_id,
+                feedback.success,
+                feedback.latency_ms,
+            );
 
-        // Persist feedback if store available
-        if let Some(ref store) = state.store {
-            let store = store.clone();
+            let store = state.state_manager.store().clone();
             let fb_clone = feedback.clone();
             tokio::spawn(async move {
                 let _ = store.insert_feedback(&fb_clone).await;
             });
-        }
 
-        (StatusCode::OK, Json(serde_json::json!({"status": "observed"})))
-    } else {
-        (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "quantum mode disabled"})))
+            (StatusCode::OK, Json(serde_json::json!({"status": "observed"})))
+        }
+        None => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "quantum mode disabled"}))),
     }
 }
 
@@ -609,7 +611,7 @@ async fn grpc_handler(
                 Ok(msg) => {
                     let destinations = state.transport.plumber.route(&msg);
                     let _selected = if let Some(ref q) = state.transport.quantum {
-                        q.route(&msg, &destinations).await
+                        q.route(&msg, &destinations)
                     } else {
                         destinations.first().cloned()
                     };
@@ -648,8 +650,8 @@ async fn agents_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let agents: Vec<serde_json::Value> = state
-        .transport
-        .agents
+        .state_manager
+        .agents()
         .list()
         .into_iter()
         .map(|a| {
@@ -669,7 +671,8 @@ async fn endpoints_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let endpoints: Vec<serde_json::Value> = state
-        .endpoints
+        .state_manager
+        .endpoints()
         .iter()
         .map(|e| {
             let ep = e.value();
@@ -704,29 +707,27 @@ async fn conversation_messages_handler(
         Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid uuid"}))),
     };
 
-    match state.store {
-        Some(ref store) => match store.get_messages_by_conversation(cid, 100).await {
-            Ok(msgs) => {
-                let messages: Vec<serde_json::Value> = msgs
-                    .into_iter()
-                    .map(|m| {
-                        serde_json::json!({
-                            "id": m.id,
-                            "parent_id": m.parent_id,
-                            "conversation_id": m.conversation_id,
-                            "timestamp": m.timestamp,
-                            "sender": m.sender,
-                            "path": m.path,
-                            "msg_type": m.msg_type,
-                            "data": m.data,
-                        })
+    let store = state.state_manager.store();
+    match store.get_messages_by_conversation(cid, 100).await {
+        Ok(msgs) => {
+            let messages: Vec<serde_json::Value> = msgs
+                .into_iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "id": m.id,
+                        "parent_id": m.parent_id,
+                        "conversation_id": m.conversation_id,
+                        "timestamp": m.timestamp,
+                        "sender": m.sender,
+                        "path": m.path,
+                        "msg_type": m.msg_type,
+                        "data": m.data,
                     })
-                    .collect();
-                (StatusCode::OK, Json(serde_json::json!({ "messages": messages })))
-            }
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
-        },
-        None => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "persistence disabled"}))),
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({ "messages": messages })))
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
     }
 }
 
@@ -739,8 +740,8 @@ async fn conversation_quantum_handler(
         Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid uuid"}))),
     };
 
-    match state.transport.quantum {
-        Some(ref q) => {
+    match state.state_manager.quantum() {
+        Some(q) => {
             let diag = q.diagnostics(cid);
             let endpoints: Vec<serde_json::Value> = diag
                 .into_iter()
@@ -762,31 +763,29 @@ async fn conversation_quantum_handler(
 async fn conversations_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.store {
-        Some(ref store) => match store.list_conversations(100).await {
-            Ok(convs) => {
-                let conversations: Vec<serde_json::Value> = convs
-                    .into_iter()
-                    .map(|(id, count)| {
-                        serde_json::json!({
-                            "conversation_id": id,
-                            "message_count": count,
-                        })
+    let store = state.state_manager.store();
+    match store.list_conversations(100).await {
+        Ok(convs) => {
+            let conversations: Vec<serde_json::Value> = convs
+                .into_iter()
+                .map(|(id, count)| {
+                    serde_json::json!({
+                        "conversation_id": id,
+                        "message_count": count,
                     })
-                    .collect();
-                (StatusCode::OK, Json(serde_json::json!({ "conversations": conversations })))
-            }
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
-        },
-        None => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "persistence disabled"}))),
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({ "conversations": conversations })))
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
     }
 }
 
 async fn circuit_state_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    match state.proxy.circuit {
-        Some(ref c) => {
+    match state.state_manager.circuit() {
+        Some(c) => {
             let diag = c.diagnostics();
             let circuits: Vec<serde_json::Value> = diag
                 .into_iter()
@@ -813,7 +812,8 @@ async fn mcp_tools_handler(
     State(state): State<AppState>,
 ) -> impl IntoResponse {
     let tools: Vec<serde_json::Value> = state
-        .mcp
+        .state_manager
+        .mcp()
         .discover_all()
         .await
         .into_iter()
