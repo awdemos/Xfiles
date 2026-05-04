@@ -336,3 +336,30 @@ struct QuantumStateRow {
     pulls: i64,
     total_reward: f64,
 }
+
+impl Store {
+    pub async fn insert_event(&self, event: &crate::event::Event) -> anyhow::Result<()> {
+        let metadata = serde_json::to_string(&event.metadata).unwrap_or_default();
+
+        sqlx::query(
+            r#"
+            INSERT INTO events (id, timestamp, kind, severity, source, message, conversation_id, endpoint_id, agent_id, metadata)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "#
+        )
+        .bind(event.id.to_string())
+        .bind(event.timestamp.to_rfc3339())
+        .bind(format!("{:?}", event.kind))
+        .bind(format!("{:?}", event.severity))
+        .bind(&event.source)
+        .bind(&event.message)
+        .bind(event.conversation_id.map(|id| id.to_string()))
+        .bind(event.endpoint_id.as_ref())
+        .bind(event.agent_id.as_ref())
+        .bind(metadata)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+}
