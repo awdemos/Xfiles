@@ -136,7 +136,7 @@ async fn handle_op(
                 // In a full implementation we'd look up the MCP endpoint here
                 let destinations = plumber.route(&msg);
                 if let Some(q) = quantum {
-                    q.route(&msg, &destinations).await
+                    q.route(&msg, &destinations)
                 } else {
                     destinations.first().cloned()
                 }
@@ -146,7 +146,7 @@ async fn handle_op(
 
                 // Quantum mode routing if enabled
                 if let Some(q) = quantum {
-                    q.route(&msg, &destinations).await
+                    q.route(&msg, &destinations)
                 } else {
                     destinations.first().cloned()
                 }

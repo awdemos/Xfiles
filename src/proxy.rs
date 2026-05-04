@@ -123,7 +123,7 @@ pub async fn chat_completions_handler(
 
     // Quantum routing
     let selected_id = if let Some(ref q) = state.quantum {
-        q.route(&msg, &candidates).await
+        q.route(&msg, &candidates)
     } else {
         candidates.first().cloned()
     };
