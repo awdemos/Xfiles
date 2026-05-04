@@ -2,7 +2,12 @@ use std::sync::Arc;
 use xfiles::ai::endpoints::{AiEndpoint, EndpointType};
 use xfiles::quantum::QuantumRouter;
 use xfiles::config::QuantumConfig;
+use xfiles::store::Store;
 use dashmap::DashMap;
+
+async fn create_test_store() -> Arc<Store> {
+    Arc::new(Store::new(":memory:").await.expect("failed to create test store"))
+}
 
 fn build_test_endpoints() -> Arc<DashMap<String, AiEndpoint>> {
     let map = DashMap::new();
@@ -39,11 +44,12 @@ fn build_test_endpoints() -> Arc<DashMap<String, AiEndpoint>> {
 async fn test_quantum_selects_from_candidates() {
     let endpoints = build_test_endpoints();
     let config = QuantumConfig::default();
-    let router = QuantumRouter::new(endpoints, config, None);
+    let store = create_test_store().await;
+    let router = QuantumRouter::new(endpoints, config, store);
 
     let msg = xfiles::message::Message::new("test", "/ai", "llm_request");
     let candidates = vec!["ep-a".into(), "ep-b".into()];
-    let selected = router.route(&msg, &candidates).await;
+    let selected = router.route(&msg, &candidates);
 
     assert!(selected.is_some());
     let id = selected.unwrap();
@@ -54,7 +60,8 @@ async fn test_quantum_selects_from_candidates() {
 async fn test_quantum_updates_on_observation() {
     let endpoints = build_test_endpoints();
     let config = QuantumConfig::default();
-    let router = QuantumRouter::new(endpoints, config, None);
+    let store = create_test_store().await;
+    let router = QuantumRouter::new(endpoints, config, store);
 
     let conv = uuid::Uuid::new_v4();
     router.observe(conv, "ep-a", true, 100);
@@ -73,10 +80,11 @@ async fn test_quantum_updates_on_observation() {
 async fn test_quantum_empty_candidates_returns_none() {
     let endpoints = build_test_endpoints();
     let config = QuantumConfig::default();
-    let router = QuantumRouter::new(endpoints, config, None);
+    let store = create_test_store().await;
+    let router = QuantumRouter::new(endpoints, config, store);
 
     let msg = xfiles::message::Message::new("test", "/ai", "llm_request");
-    let selected = router.route(&msg, &[]).await;
+    let selected = router.route(&msg, &[]);
 
     assert!(selected.is_none());
 }

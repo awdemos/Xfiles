@@ -16,7 +16,7 @@ pub struct QuantumRouter {
     #[allow(dead_code)]
     endpoints: Arc<dashmap::DashMap<String, AiEndpoint>>,
     config: crate::config::QuantumConfig,
-    store: Option<Arc<crate::store::Store>>,
+    store: Arc<crate::store::Store>,
     /// conversation_id -> last selected endpoint_id
     last_endpoint: Arc<DashMap<Uuid, String>>,
 }
@@ -25,7 +25,7 @@ impl QuantumRouter {
     pub fn new(
         endpoints: Arc<dashmap::DashMap<String, AiEndpoint>>,
         config: crate::config::QuantumConfig,
-        store: Option<Arc<crate::store::Store>>,
+        store: Arc<crate::store::Store>,
     ) -> Self {
         Self {
             state: QuantumStateManager::new(),
@@ -39,7 +39,6 @@ impl QuantumRouter {
 
     /// Load persisted quantum state from the store.
     pub async fn load_from_store(&self) {
-        let Some(ref _store) = self.store else { return };
         // We can't enumerate all conversations efficiently from the current schema,
         // so this is a hook for future optimization. For now, state rebuilds lazily.
         tracing::info!("quantum state lazy-loaded from store (future: eager restore)");
@@ -54,7 +53,7 @@ impl QuantumRouter {
     }
 
     /// Route a message to a destination using quantum-inspired selection.
-    pub async fn route(&self, msg: &Message, candidates: &[String]) -> Option<String> {
+    pub fn route(&self, msg: &Message, candidates: &[String]) -> Option<String> {
         if candidates.is_empty() {
             return None;
         }
@@ -133,20 +132,17 @@ impl QuantumRouter {
             self.config.decoherence_rate,
         );
 
-        // Persist to store if available
-        if let Some(ref store) = self.store {
-            let ep_state = {
-                let state = self.state.get_or_create(conversation_id);
-                state.endpoint_states.get(endpoint_id).map(|e| e.clone())
-            };
-            if let Some(cloned) = ep_state {
-                let ep = endpoint_id.to_string();
-                let store = store.clone();
-                let cid = conversation_id;
-                tokio::spawn(async move {
-                    let _ = store.save_quantum_state(cid, &ep, &cloned).await;
-                });
-            }
+        let ep_state = {
+            let state = self.state.get_or_create(conversation_id);
+            state.endpoint_states.get(endpoint_id).map(|e| e.clone())
+        };
+        if let Some(cloned) = ep_state {
+            let ep = endpoint_id.to_string();
+            let store = self.store.clone();
+            let cid = conversation_id;
+            tokio::spawn(async move {
+                let _ = store.save_quantum_state(cid, &ep, &cloned).await;
+            });
         }
     }
 
