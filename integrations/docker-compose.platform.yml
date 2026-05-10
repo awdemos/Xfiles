@@ -1,0 +1,59 @@
+services:
+  xfiles:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "9999:9999"
+    environment:
+      - XFILES_CONFIG=/etc/xfiles/xfiles.toml
+      - XFILES_API_KEY=xfiles-secret
+      - RUST_LOG=info
+    volumes:
+      - ./configs/xfiles.toml:/etc/xfiles/xfiles.toml:ro
+      - xfiles-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - awdemos
+
+  # Local LLM endpoint (optional - enable if you have a local model)
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama-data:/root/.ollama
+  #   networks:
+  #     - awdemos
+
+  # Kairo API server (optional - enable for agent orchestration)
+  # kairo:
+  #   build:
+  #     context: ../../kairo
+  #     dockerfile: Dockerfile
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - KAIRO_PORT=3000
+  #     - KAIRO_LOG=info
+  #     # Add your API keys:
+  #     # - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #     # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+  #   networks:
+  #     - awdemos
+  #   depends_on:
+  #     xfiles:
+  #       condition: service_healthy
+
+volumes:
+  xfiles-data:
+  # ollama-data:
+
+networks:
+  awdemos:
+    driver: bridge

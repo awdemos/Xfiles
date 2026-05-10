@@ -1,0 +1,40 @@
+# Xfiles hub configuration for awdemos platform
+# This config registers all platform services as endpoints
+
+[hub]
+bind_addr = "0.0.0.0:9999"
+database_url = "sqlite:/data/xfiles.db"
+
+[auth]
+api_key = "xfiles-secret"
+
+[rate_limit]
+max_requests = 100
+window_secs = 60
+
+[circuit]
+failure_threshold = 5
+recovery_timeout_secs = 30
+
+# AI inference endpoints
+# Xfiles will route chat requests to these based on quantum scoring
+[[ai.endpoints]]
+name = "ollama"
+url = "http://ollama:11434"
+endpoint_type = "inference"
+
+# Kairo agent orchestrator (uncomment when kairo is running)
+# [[ai.endpoints]]
+# name = "kairo"
+# url = "http://kairo:3000"
+# endpoint_type = "agent"
+
+# External providers (add your API keys)
+# [[ai.endpoints]]
+# name = "openai"
+# url = "https://api.openai.com/v1"
+# endpoint_type = "inference"
+# headers = { "Authorization" = "Bearer ${OPENAI_API_KEY}" }
+
+[tls]
+enabled = false
