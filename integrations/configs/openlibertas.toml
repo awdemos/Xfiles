@@ -1,0 +1,25 @@
+# openlibertas configuration for awdemos platform integration
+# Place this at: ~/.config/openlibertas/config.toml
+
+# Xfiles hub acts as the unified backend
+# It provides quantum routing, circuit breaker, and MCP discovery
+[[providers]]
+name = "xfiles"
+base_url = "http://localhost:9999/v1"
+api_key = "xfiles-secret"
+enabled = true
+supports_tools = true
+
+# Fallback: direct local endpoint (e.g., llama.cpp)
+# Only used if Xfiles is unavailable
+[[providers]]
+name = "local"
+base_url = "http://127.0.0.1:8080/v1"
+api_key = "sk-local"
+enabled = false
+supports_tools = true
+
+max_tokens = 4096
+
+# MCP servers are read from ~/.config/opencode/opencode.json
+# Xfiles will discover and route MCP tools automatically
