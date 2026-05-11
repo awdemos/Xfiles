@@ -10,8 +10,8 @@ services:
       - XFILES_API_KEY=xfiles-secret
       - RUST_LOG=info
     volumes:
-      - ./configs/xfiles.toml:/etc/xfiles/xfiles.toml:ro
-      - xfiles-data:/data
+      - ./configs/xfiles.toml:/etc/xfiles/xfiles.toml:ro,z
+      - ./data:/data:z
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9999/health"]
       interval: 10s
@@ -31,24 +31,26 @@ services:
   #   networks:
   #     - awdemos
 
-  # Kairo API server (optional - enable for agent orchestration)
-  # kairo:
-  #   build:
-  #     context: ../../kairo
-  #     dockerfile: Dockerfile
-  #   ports:
-  #     - "3000:3000"
-  #   environment:
-  #     - KAIRO_PORT=3000
-  #     - KAIRO_LOG=info
-  #     # Add your API keys:
-  #     # - OPENAI_API_KEY=${OPENAI_API_KEY}
-  #     # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-  #   networks:
-  #     - awdemos
-  #   depends_on:
-  #     xfiles:
-  #       condition: service_healthy
+  kairo:
+    build:
+      context: ../../kairo
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - KAIRO_PORT=3000
+      - KAIRO_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - awdemos
+    depends_on:
+      xfiles:
+        condition: service_healthy
 
 volumes:
   xfiles-data:
