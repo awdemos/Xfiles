@@ -3,7 +3,7 @@
 
 [hub]
 bind_addr = "0.0.0.0:9999"
-database_url = "sqlite:/data/xfiles.db"
+database_url = "sqlite:xfiles.db"
 
 [auth]
 api_key = "xfiles-secret"
