@@ -7,7 +7,6 @@
 /// - Streaming: server-side event stream
 ///
 /// To use: enable the `grpc` feature or connect to `/grpc` on the hub.
-
 use crate::message::Message;
 use serde::{Deserialize, Serialize};
 

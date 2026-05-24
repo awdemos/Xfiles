@@ -84,7 +84,7 @@ impl ConversationState {
     pub fn get_or_insert(&self, endpoint_id: &str) -> EndpointState {
         self.endpoint_states
             .entry(endpoint_id.to_string())
-            .or_insert_with(EndpointState::default)
+            .or_default()
             .clone()
     }
 
@@ -94,7 +94,7 @@ impl ConversationState {
             let mut entry = self
                 .endpoint_states
                 .entry(endpoint_id.to_string())
-                .or_insert_with(EndpointState::default);
+                .or_default();
 
             entry.pulls += 1;
             entry.total_reward += reward;
@@ -126,7 +126,7 @@ impl ConversationState {
         for key in entries {
             if let Some(mut entry) = self.endpoint_states.get_mut(&key) {
                 entry.amplitude.real = entry.amplitude.real * (1.0 - rate) + uniform_mag * rate;
-                entry.amplitude.imag = entry.amplitude.imag * (1.0 - rate);
+                entry.amplitude.imag *= 1.0 - rate;
             }
         }
     }

@@ -56,10 +56,9 @@ pub async fn api_key_middleware(
 }
 
 /// WebSocket-specific auth check (agent token).
-pub fn check_agent_token(config: &AuthConfig, request: &Request) -> bool {
+pub fn check_agent_token(config: &AuthConfig, headers: &axum::http::HeaderMap) -> bool {
     if let Some(ref token) = config.agent_token {
-        let auth_header = request
-            .headers()
+        let auth_header = headers
             .get(header::AUTHORIZATION)
             .and_then(|h| h.to_str().ok());
 

@@ -125,14 +125,18 @@ impl McpRegistry {
             match client.discover_tools().await {
                 Ok(tools) => {
                     for tool in tools {
-                        if self.tool_index.contains_key(&tool.name) {
-                            tracing::warn!(
-                                "tool '{}' exists on multiple endpoints; using first discovered ({})",
-                                tool.name,
-                                id
-                            );
-                        } else {
-                            self.tool_index.insert(tool.name, id.clone());
+                        let tool_name = tool.name;
+                        match self.tool_index.entry(tool_name.clone()) {
+                            std::collections::hash_map::Entry::Occupied(_) => {
+                                tracing::warn!(
+                                    "tool '{}' exists on multiple endpoints; using first discovered ({})",
+                                    tool_name,
+                                    id
+                                );
+                            }
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(id.clone());
+                            }
                         }
                     }
                 }

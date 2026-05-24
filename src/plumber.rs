@@ -42,7 +42,7 @@ impl Plumber {
             header_match,
         });
         // Sort by priority descending
-        rules.sort_by(|a, b| b.priority.cmp(&a.priority));
+        rules.sort_by_key(|b| std::cmp::Reverse(b.priority));
         Ok(())
     }
 
@@ -71,7 +71,7 @@ impl Plumber {
             msg.msg_type,
             msg.sender,
             msg.path,
-            msg.data.to_string()
+            msg.data
         );
         if !rule.pattern.is_match(&haystack) {
             return false;

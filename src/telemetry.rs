@@ -9,9 +9,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 pub fn init_telemetry(service_name: &str) -> Option<()> {
     let otlp_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
 
-    if otlp_endpoint.is_none() {
-        return None;
-    }
+    otlp_endpoint.as_ref()?;
 
     let exporter = opentelemetry_otlp::new_exporter()
         .tonic()

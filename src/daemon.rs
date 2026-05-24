@@ -18,7 +18,7 @@ use crate::state::StateManager;
 use crate::store::Store;
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     extract::ws::WebSocketUpgrade,
     http::{StatusCode, header},
     middleware::from_fn_with_state,
@@ -43,6 +43,7 @@ pub struct AppState {
     pub pipeline: Arc<RoutingPipeline>,
     pub proxy: Arc<ProxyState>,
     pub transport: Arc<TransportState>,
+    pub auth: Arc<crate::auth::AuthConfig>,
 }
 
 /// Build and run the Xfiles daemon.
@@ -170,18 +171,19 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         circuit: circuit.clone(),
     });
 
-    let app_state = AppState {
-        state_manager: state_manager.clone(),
-        pipeline: pipeline.clone(),
-        proxy: proxy.clone(),
-        transport: transport.clone(),
-    };
-
     // Auth config
     let auth_config = Arc::new(AuthConfig {
         api_key: config.auth.api_key.clone(),
         agent_token: config.auth.agent_token.clone(),
     });
+
+    let app_state = AppState {
+        state_manager: state_manager.clone(),
+        pipeline: pipeline.clone(),
+        proxy: proxy.clone(),
+        transport: transport.clone(),
+        auth: auth_config.clone(),
+    };
 
     // Rate limiter
     let rate_limiter = Arc::new(RateLimiter::new(
@@ -212,6 +214,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .route("/conversations/:id/quantum-state", get(conversation_quantum_handler))
         .route("/ws/{agent_id}", get(ws_handler_wrapped))
         .nest("/api/v1", api_router)
+        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower_http::timeout::TimeoutLayer::new(Duration::from_secs(30)))
@@ -413,7 +416,11 @@ async fn ws_handler_wrapped(
     Path(agent_id): Path<String>,
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    if !crate::auth::check_agent_token(&state.auth, &headers) {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
     ws.on_upgrade(move |socket| handle_socket(socket, agent_id, state.transport))
 }
 
