@@ -19,7 +19,7 @@ impl EntanglementTable {
         let conv_map = self
             .correlations
             .entry(conversation_id)
-            .or_insert_with(DashMap::new);
+            .or_default();
 
         let key = Self::ordered_key(endpoint_a, endpoint_b);
         let mut entry = conv_map.entry(key).or_insert(0.0);

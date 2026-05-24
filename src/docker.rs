@@ -129,6 +129,6 @@ impl DockerDiscovery {
     }
 
     fn extract_first_port(&self, ports: &Option<Vec<bollard::models::Port>>) -> Option<u16> {
-        ports.as_ref()?.first()?.public_port.map(|p| p as u16)
+        ports.as_ref()?.first()?.public_port
     }
 }

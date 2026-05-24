@@ -34,7 +34,7 @@ impl MessageQueue {
         };
         self.queues
             .entry(agent_id.to_string())
-            .or_insert_with(VecDeque::new)
+            .or_default()
             .push_back(qm);
         tracing::info!("queued message for agent {}", agent_id);
     }
