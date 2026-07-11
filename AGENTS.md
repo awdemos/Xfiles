@@ -117,3 +117,15 @@ Background tasks are spawned in `src/daemon.rs::run()` before the server starts.
 - Async throughout — all handlers and store methods are `async`.
 - Use `Arc<DashMap<...>>` for shared concurrent state.
 - Modules are public (`pub mod`) in `src/lib.rs` so they can be tested externally.
+
+## Deployment
+
+Observed deployment configuration:
+
+- Container (`Dockerfile`) — build with `docker build -t <image> .`
+
+General redeploy process:
+
+1. Commit and push changes to the default branch.
+2. Trigger the relevant CI/CD pipeline or run the documented deploy command.
+3. If the project is served via GitHub Pages, the site redeploys automatically after the push.
