@@ -1,12 +1,16 @@
+use dashmap::DashMap;
 use std::sync::Arc;
 use xfiles::ai::endpoints::{AiEndpoint, EndpointType};
-use xfiles::quantum::QuantumRouter;
 use xfiles::config::QuantumConfig;
+use xfiles::quantum::QuantumRouter;
 use xfiles::store::Store;
-use dashmap::DashMap;
 
 async fn create_test_store() -> Arc<Store> {
-    Arc::new(Store::new(":memory:").await.expect("failed to create test store"))
+    Arc::new(
+        Store::new(":memory:")
+            .await
+            .expect("failed to create test store"),
+    )
 }
 
 fn build_test_endpoints() -> Arc<DashMap<String, AiEndpoint>> {

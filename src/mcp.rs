@@ -53,12 +53,7 @@ impl McpClient {
             self.endpoint.url.trim_end_matches('/'),
             tool_name
         );
-        let resp = self
-            .http
-            .post(&url)
-            .json(&arguments)
-            .send()
-            .await?;
+        let resp = self.http.post(&url).json(&arguments).send().await?;
         let result: serde_json::Value = resp.json().await?;
         Ok(result)
     }

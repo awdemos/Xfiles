@@ -54,7 +54,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Health { url } => {
             let client = reqwest::Client::new();
-            let resp = client.get(format!("{}/health", url.trim_end_matches('/'))).send().await?;
+            let resp = client
+                .get(format!("{}/health", url.trim_end_matches('/')))
+                .send()
+                .await?;
             println!("Status: {}", resp.status());
             let body: serde_json::Value = resp.json().await?;
             println!("{}", serde_json::to_string_pretty(&body)?);
@@ -83,7 +86,10 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Metrics { url } => {
             let client = reqwest::Client::new();
-            let resp = client.get(format!("{}/metrics", url.trim_end_matches('/'))).send().await?;
+            let resp = client
+                .get(format!("{}/metrics", url.trim_end_matches('/')))
+                .send()
+                .await?;
             println!("Status: {}", resp.status());
             let text = resp.text().await?;
             println!("{}", text);

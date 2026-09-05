@@ -118,7 +118,11 @@ impl ConversationState {
     }
 
     fn apply_decoherence(&self, rate: f64) {
-        let entries: Vec<_> = self.endpoint_states.iter().map(|e| e.key().clone()).collect();
+        let entries: Vec<_> = self
+            .endpoint_states
+            .iter()
+            .map(|e| e.key().clone())
+            .collect();
         if entries.is_empty() {
             return;
         }
@@ -147,6 +151,9 @@ impl ConversationState {
         dist
     }
 }
+
+/// Diagnostic tuple for an endpoint within a conversation.
+pub type EndpointDiagnostic = (String, f64, u64, f64);
 
 /// Global quantum state manager.
 #[derive(Debug, Clone, Default)]
@@ -198,12 +205,12 @@ impl QuantumStateManager {
         self.conversations.len()
     }
 
-    pub fn all_diagnostics(&self) -> Vec<(Uuid, Vec<(String, f64, u64, f64)>)> {
+    pub fn all_diagnostics(&self) -> Vec<(Uuid, Vec<EndpointDiagnostic>)> {
         self.conversations
             .iter()
             .map(|e| {
                 let conv = e.value();
-                let diag: Vec<(String, f64, u64, f64)> = conv
+                let diag: Vec<EndpointDiagnostic> = conv
                     .endpoint_states
                     .iter()
                     .map(|ep| {

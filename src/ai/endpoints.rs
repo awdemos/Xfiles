@@ -83,7 +83,10 @@ impl Default for EndpointHealth {
 
 impl AiEndpoint {
     pub fn from_config(cfg: &crate::config::AiEndpoint) -> anyhow::Result<Self> {
-        let endpoint_type = cfg.endpoint_type.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+        let endpoint_type = cfg
+            .endpoint_type
+            .parse()
+            .map_err(|e: String| anyhow::anyhow!(e))?;
         Ok(Self {
             id: format!("{}-{}", cfg.name, uuid::Uuid::new_v4()),
             name: cfg.name.clone(),

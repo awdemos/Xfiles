@@ -1,26 +1,26 @@
 use crate::agent::AgentRegistry;
 use crate::ai::{AiEndpoint, DiscoveryEngine, ProbeEngine};
-use crate::auth::{AuthConfig, api_key_middleware};
+use crate::auth::{api_key_middleware, AuthConfig};
 use crate::circuit::CircuitBreaker;
 use crate::config::Config;
 use crate::docker::DockerDiscovery;
 use crate::fs::VfsRegistry;
-use crate::grpc::{GrpcCodec, GrpcResponse, GrpcStatus, decode_message};
+use crate::grpc::{decode_message, GrpcCodec, GrpcResponse, GrpcStatus};
 use crate::mcp::McpRegistry;
-use crate::net::transport::{TransportState, handle_socket};
+use crate::net::transport::{handle_socket, TransportState};
 use crate::plumber::Plumber;
 use crate::proxy::{chat_completions_handler, list_models_handler, ProxyState};
 use crate::quantum::QuantumRouter;
 use crate::queue::MessageQueue;
-use crate::ratelimit::{RateLimiter, rate_limit_middleware};
-use crate::router::{RoutingPipeline, default_pipeline};
+use crate::ratelimit::{rate_limit_middleware, RateLimiter};
+use crate::router::{default_pipeline, RoutingPipeline};
 use crate::state::StateManager;
 use crate::store::Store;
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Path, State},
     extract::ws::WebSocketUpgrade,
-    http::{StatusCode, header},
+    extract::{DefaultBodyLimit, Path, State},
+    http::{header, StatusCode},
     middleware::from_fn_with_state,
     response::IntoResponse,
     routing::{get, post},
@@ -66,7 +66,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     // SQLite store - now required for data integrity
     let store = Arc::new(Store::new(&config.hub.database_url).await.map_err(|e| {
-        anyhow::anyhow!("SQLite store failed to initialize: {}. Persistence is required.", e)
+        anyhow::anyhow!(
+            "SQLite store failed to initialize: {}. Persistence is required.",
+            e
+        )
     })?);
     tracing::info!("SQLite store initialized at {}", config.hub.database_url);
 
@@ -210,19 +213,30 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .route("/endpoints", get(endpoints_handler))
         .route("/mcp/tools", get(mcp_tools_handler))
         .route("/conversations", get(conversations_handler))
-        .route("/conversations/:id/messages", get(conversation_messages_handler))
-        .route("/conversations/:id/quantum-state", get(conversation_quantum_handler))
+        .route(
+            "/conversations/:id/messages",
+            get(conversation_messages_handler),
+        )
+        .route(
+            "/conversations/:id/quantum-state",
+            get(conversation_quantum_handler),
+        )
         .route("/ws/{agent_id}", get(ws_handler_wrapped))
         .nest("/api/v1", api_router)
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(tower_http::timeout::TimeoutLayer::new(Duration::from_secs(30)))
+        .layer(tower_http::timeout::TimeoutLayer::new(Duration::from_secs(
+            30,
+        )))
         .with_state(app_state.clone());
 
     // Apply rate limiting if enabled
     if config.rate_limit.enabled {
-        app = app.layer(from_fn_with_state(rate_limiter.clone(), rate_limit_middleware));
+        app = app.layer(from_fn_with_state(
+            rate_limiter.clone(),
+            rate_limit_middleware,
+        ));
     }
 
     // Apply auth middleware
@@ -338,9 +352,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     let server_future: tokio::task::JoinHandle<anyhow::Result<()>> = if let Some(tls) = tls_config {
         let rustls_config = crate::tls::build_tls_config(&tls)?;
-        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(
-            std::sync::Arc::new(rustls_config)
-        );
+        let rustls_config =
+            axum_server::tls_rustls::RustlsConfig::from_config(std::sync::Arc::new(rustls_config));
         let bind_addr = config.hub.bind_addr;
         tracing::info!("Xfiles listening on {} (TLS enabled)", bind_addr);
         if tls.client_ca_path.is_some() {
@@ -357,9 +370,12 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         let listener = TcpListener::bind(config.hub.bind_addr).await?;
         tracing::info!("Xfiles listening on {}", config.hub.bind_addr);
         tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-                .await
-                .map_err(|e| anyhow::anyhow!("server error: {}", e))?;
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("server error: {}", e))?;
             Ok(())
         })
     };
@@ -444,13 +460,22 @@ async fn fs_read_handler(
     if let Some(node) = vfs.get(&path) {
         if node.is_dir() {
             let children = vfs.list(&path);
-            (StatusCode::OK, Json(serde_json::json!({"path": path, "type": "dir", "children": children })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"path": path, "type": "dir", "children": children })),
+            )
         } else {
             let data = node.read().await;
-            (StatusCode::OK, Json(serde_json::json!({"path": path, "data": String::from_utf8_lossy(&data) })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"path": path, "data": String::from_utf8_lossy(&data) })),
+            )
         }
     } else {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found", "path": path })))
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not found", "path": path })),
+        )
     }
 }
 
@@ -462,14 +487,26 @@ async fn fs_write_handler(
     let vfs = state.state_manager.vfs();
     if let Some(node) = vfs.get(&path) {
         if node.is_dir() {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "cannot write to directory", "path": path })));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "cannot write to directory", "path": path })),
+            );
         }
         match node.write(body.into_bytes()).await {
-            Ok(()) => (StatusCode::OK, Json(serde_json::json!({"path": path, "status": "written" }))),
-            Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string(), "path": path }))),
+            Ok(()) => (
+                StatusCode::OK,
+                Json(serde_json::json!({"path": path, "status": "written" })),
+            ),
+            Err(e) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string(), "path": path })),
+            ),
         }
     } else {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found", "path": path })))
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not found", "path": path })),
+        )
     }
 }
 
@@ -493,10 +530,14 @@ async fn msg_handler(
                 let target_agent = parts[2];
                 if let Some(target) = state.state_manager.agents().get(target_agent) {
                     if let Some(target_tx) = target.tx {
-                        let _ = target_tx.send(crate::net::protocol::ProtocolOp::Message { msg: msg.clone() });
+                        let _ = target_tx
+                            .send(crate::net::protocol::ProtocolOp::Message { msg: msg.clone() });
                     }
                 } else {
-                    state.state_manager.queue().enqueue(target_agent, msg.clone());
+                    state
+                        .state_manager
+                        .queue()
+                        .enqueue(target_agent, msg.clone());
                 }
             }
         }
@@ -513,9 +554,7 @@ async fn msg_handler(
     (StatusCode::OK, Json(resp))
 }
 
-async fn quantum_state_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn quantum_state_handler(State(state): State<AppState>) -> impl IntoResponse {
     match state.state_manager.quantum() {
         Some(q) => {
             let diagnostics = q.all_diagnostics();
@@ -551,9 +590,7 @@ async fn quantum_state_handler(
     }
 }
 
-async fn proxy_models_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn proxy_models_handler(State(state): State<AppState>) -> impl IntoResponse {
     list_models_handler(State(state.proxy)).await
 }
 
@@ -583,16 +620,19 @@ async fn quantum_feedback_handler(
                 let _ = store.insert_feedback(&fb_clone).await;
             });
 
-            (StatusCode::OK, Json(serde_json::json!({"status": "observed"})))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "observed"})),
+            )
         }
-        None => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "quantum mode disabled"}))),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "quantum mode disabled"})),
+        ),
     }
 }
 
-async fn grpc_handler(
-    State(state): State<AppState>,
-    body: axum::body::Bytes,
-) -> impl IntoResponse {
+async fn grpc_handler(State(state): State<AppState>, body: axum::body::Bytes) -> impl IntoResponse {
     let codec = GrpcCodec::new();
     let req = match codec.decode_request(&body) {
         Ok(r) => r,
@@ -613,30 +653,28 @@ async fn grpc_handler(
     };
 
     let resp = match req.method.as_str() {
-        "xfiles.Message/Send" => {
-            match decode_message(&req.body) {
-                Ok(msg) => {
-                    let destinations = state.transport.plumber.route(&msg);
-                    let _selected = if let Some(ref q) = state.transport.quantum {
-                        q.route(&msg, &destinations)
-                    } else {
-                        destinations.first().cloned()
-                    };
-                    GrpcResponse {
-                        status: GrpcStatus::Ok,
-                        headers: vec![],
-                        body: b"ok".to_vec(),
-                        trailers: vec![],
-                    }
-                }
-                Err(e) => GrpcResponse {
-                    status: GrpcStatus::InvalidArgument,
+        "xfiles.Message/Send" => match decode_message(&req.body) {
+            Ok(msg) => {
+                let destinations = state.transport.plumber.route(&msg);
+                let _selected = if let Some(ref q) = state.transport.quantum {
+                    q.route(&msg, &destinations)
+                } else {
+                    destinations.first().cloned()
+                };
+                GrpcResponse {
+                    status: GrpcStatus::Ok,
                     headers: vec![],
-                    body: format!("bad message: {}", e).into_bytes(),
+                    body: b"ok".to_vec(),
                     trailers: vec![],
-                },
+                }
             }
-        }
+            Err(e) => GrpcResponse {
+                status: GrpcStatus::InvalidArgument,
+                headers: vec![],
+                body: format!("bad message: {}", e).into_bytes(),
+                trailers: vec![],
+            },
+        },
         _ => GrpcResponse {
             status: GrpcStatus::Unimplemented,
             headers: vec![],
@@ -653,9 +691,7 @@ async fn grpc_handler(
         .unwrap()
 }
 
-async fn agents_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn agents_handler(State(state): State<AppState>) -> impl IntoResponse {
     let agents: Vec<serde_json::Value> = state
         .state_manager
         .agents()
@@ -674,9 +710,7 @@ async fn agents_handler(
     Json(serde_json::json!({ "agents": agents }))
 }
 
-async fn endpoints_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn endpoints_handler(State(state): State<AppState>) -> impl IntoResponse {
     let endpoints: Vec<serde_json::Value> = state
         .state_manager
         .endpoints()
@@ -711,7 +745,12 @@ async fn conversation_messages_handler(
 ) -> impl IntoResponse {
     let cid = match id.parse::<uuid::Uuid>() {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid uuid"}))),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "invalid uuid"})),
+            )
+        }
     };
 
     let store = state.state_manager.store();
@@ -732,9 +771,15 @@ async fn conversation_messages_handler(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({ "messages": messages })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "messages": messages })),
+            )
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
     }
 }
 
@@ -744,7 +789,12 @@ async fn conversation_quantum_handler(
 ) -> impl IntoResponse {
     let cid = match id.parse::<uuid::Uuid>() {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid uuid"}))),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "invalid uuid"})),
+            )
+        }
     };
 
     match state.state_manager.quantum() {
@@ -761,15 +811,19 @@ async fn conversation_quantum_handler(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({ "conversation_id": cid, "endpoints": endpoints })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "conversation_id": cid, "endpoints": endpoints })),
+            )
         }
-        None => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "quantum mode disabled"}))),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "quantum mode disabled"})),
+        ),
     }
 }
 
-async fn conversations_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn conversations_handler(State(state): State<AppState>) -> impl IntoResponse {
     let store = state.state_manager.store();
     match store.list_conversations(100).await {
         Ok(convs) => {
@@ -782,15 +836,19 @@ async fn conversations_handler(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({ "conversations": conversations })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "conversations": conversations })),
+            )
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
     }
 }
 
-async fn circuit_state_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn circuit_state_handler(State(state): State<AppState>) -> impl IntoResponse {
     match state.state_manager.circuit() {
         Some(c) => {
             let diag = c.diagnostics();
@@ -809,15 +867,19 @@ async fn circuit_state_handler(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({ "circuits": circuits })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "circuits": circuits })),
+            )
         }
-        None => (StatusCode::OK, Json(serde_json::json!({ "status": "disabled" }))),
+        None => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "disabled" })),
+        ),
     }
 }
 
-async fn mcp_tools_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn mcp_tools_handler(State(state): State<AppState>) -> impl IntoResponse {
     let tools: Vec<serde_json::Value> = state
         .state_manager
         .mcp()

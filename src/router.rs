@@ -1,7 +1,7 @@
 use crate::ai::endpoints::{AiEndpoint, HealthStatus};
 use crate::circuit::CircuitBreaker;
-use crate::message::Message;
 use crate::mcp::McpRegistry;
+use crate::message::Message;
 use crate::plumber::Plumber;
 use crate::quantum::QuantumRouter;
 use std::sync::Arc;
@@ -106,7 +106,8 @@ impl RouterStage for McpRoutingStage {
 
             if let Some(endpoint) = self.mcp.find_endpoint_for_tool(tool_name) {
                 ctx.selected = Some(endpoint.clone());
-                ctx.explanation.push(format!("mcp tool '{}' → {}", tool_name, endpoint));
+                ctx.explanation
+                    .push(format!("mcp tool '{}' → {}", tool_name, endpoint));
                 return true;
             }
         }
@@ -128,7 +129,8 @@ impl PlumberRoutingStage {
 impl RouterStage for PlumberRoutingStage {
     fn apply(&self, msg: &Message, ctx: &mut RoutingContext) -> bool {
         let destinations = self.plumber.route(msg);
-        ctx.explanation.push(format!("plumber matched {} rule(s)", destinations.len()));
+        ctx.explanation
+            .push(format!("plumber matched {} rule(s)", destinations.len()));
         ctx.candidates = destinations;
         false // Never final - always passes candidates to next stage
     }
@@ -166,7 +168,8 @@ impl RouterStage for QuantumRoutingStage {
 
         match self.quantum.route(msg, &valid_candidates) {
             Some(selected) => {
-                ctx.explanation.push(format!("quantum selected {}", selected));
+                ctx.explanation
+                    .push(format!("quantum selected {}", selected));
                 ctx.selected = Some(selected);
                 true
             }
@@ -195,7 +198,8 @@ impl RouterStage for FallbackRoutingStage {
             ctx.selected = Some(first.clone());
             true
         } else {
-            ctx.explanation.push("fallback: no candidates available".into());
+            ctx.explanation
+                .push("fallback: no candidates available".into());
             false
         }
     }
@@ -208,7 +212,10 @@ pub struct CircuitAwareStage {
 }
 
 impl CircuitAwareStage {
-    pub fn new(circuit: Arc<CircuitBreaker>, endpoints: Arc<dashmap::DashMap<String, AiEndpoint>>) -> Self {
+    pub fn new(
+        circuit: Arc<CircuitBreaker>,
+        endpoints: Arc<dashmap::DashMap<String, AiEndpoint>>,
+    ) -> Self {
         Self { circuit, endpoints }
     }
 }

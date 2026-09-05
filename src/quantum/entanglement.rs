@@ -2,11 +2,14 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Per-conversation endpoint pair -> correlation score.
+type CorrelationMap = DashMap<(String, String), f64>;
+
 /// Tracks correlations between endpoints within a conversation.
 #[derive(Debug, Clone, Default)]
 pub struct EntanglementTable {
-    /// conversation_id -> (endpoint_a, endpoint_b) -> correlation score [-1, 1]
-    correlations: Arc<DashMap<Uuid, DashMap<(String, String), f64>>>,
+    /// conversation_id -> correlation map
+    correlations: Arc<DashMap<Uuid, CorrelationMap>>,
 }
 
 impl EntanglementTable {
@@ -15,11 +18,14 @@ impl EntanglementTable {
     }
 
     /// Record that endpoint_a and endpoint_b were both used successfully in the same conversation.
-    pub fn record_pair(&self, conversation_id: Uuid, endpoint_a: &str, endpoint_b: &str, reward: f64) {
-        let conv_map = self
-            .correlations
-            .entry(conversation_id)
-            .or_default();
+    pub fn record_pair(
+        &self,
+        conversation_id: Uuid,
+        endpoint_a: &str,
+        endpoint_b: &str,
+        reward: f64,
+    ) {
+        let conv_map = self.correlations.entry(conversation_id).or_default();
 
         let key = Self::ordered_key(endpoint_a, endpoint_b);
         let mut entry = conv_map.entry(key).or_insert(0.0);
@@ -28,7 +34,12 @@ impl EntanglementTable {
     }
 
     /// Get the correlation between two endpoints in a conversation.
-    pub fn get_correlation(&self, conversation_id: Uuid, endpoint_a: &str, endpoint_b: &str) -> f64 {
+    pub fn get_correlation(
+        &self,
+        conversation_id: Uuid,
+        endpoint_a: &str,
+        endpoint_b: &str,
+    ) -> f64 {
         self.correlations
             .get(&conversation_id)
             .and_then(|conv| {
@@ -46,7 +57,9 @@ impl EntanglementTable {
         distribution: &mut [(String, f64)],
         strength: f64,
     ) {
-        let Some(prev) = previous_endpoint else { return };
+        let Some(prev) = previous_endpoint else {
+            return;
+        };
         for (ep, prob) in distribution.iter_mut() {
             let corr = self.get_correlation(conversation_id, prev, ep);
             // Boost or suppress based on correlation

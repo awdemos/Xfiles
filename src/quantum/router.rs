@@ -1,7 +1,7 @@
 use crate::ai::endpoints::AiEndpoint;
 use crate::message::Message;
 use crate::quantum::entanglement::EntanglementTable;
-use crate::quantum::state::QuantumStateManager;
+use crate::quantum::state::{EndpointDiagnostic, QuantumStateManager};
 use dashmap::DashMap;
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
@@ -48,7 +48,7 @@ impl QuantumRouter {
         self.state.conversation_count()
     }
 
-    pub fn all_diagnostics(&self) -> Vec<(Uuid, Vec<(String, f64, u64, f64)>)> {
+    pub fn all_diagnostics(&self) -> Vec<(Uuid, Vec<EndpointDiagnostic>)> {
         self.state.all_diagnostics()
     }
 
@@ -84,7 +84,10 @@ impl QuantumRouter {
         }
 
         // Apply entanglement from previous message in conversation
-        let previous_endpoint = self.last_endpoint.get(&msg.conversation_id).map(|e| e.clone());
+        let previous_endpoint = self
+            .last_endpoint
+            .get(&msg.conversation_id)
+            .map(|e| e.clone());
         self.entanglement.apply_entanglement(
             msg.conversation_id,
             previous_endpoint.as_deref(),
@@ -109,14 +112,21 @@ impl QuantumRouter {
         };
 
         if let Some(ref ep_id) = selected {
-            self.last_endpoint.insert(msg.conversation_id, ep_id.clone());
+            self.last_endpoint
+                .insert(msg.conversation_id, ep_id.clone());
         }
 
         selected
     }
 
     /// Observe the result of routing and update quantum state.
-    pub fn observe(&self, conversation_id: uuid::Uuid, endpoint_id: &str, success: bool, latency_ms: u64) {
+    pub fn observe(
+        &self,
+        conversation_id: uuid::Uuid,
+        endpoint_id: &str,
+        success: bool,
+        latency_ms: u64,
+    ) {
         // Reward function: 1.0 for success, penalize latency
         let latency_penalty = (latency_ms as f64 / 5000.0).min(1.0);
         let reward = if success {
@@ -181,6 +191,7 @@ impl QuantumRouter {
     /// Periodic maintenance.
     pub fn tick(&self) {
         self.state.prune_old(3600); // Prune conversations older than 1 hour
-        self.entanglement.prune_old(self.config.entanglement_window * 2);
+        self.entanglement
+            .prune_old(self.config.entanglement_window * 2);
     }
 }

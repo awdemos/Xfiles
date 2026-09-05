@@ -1,6 +1,6 @@
-use xfiles::queue::MessageQueue;
 use xfiles::message::Message;
 use xfiles::net::protocol::ProtocolOp;
+use xfiles::queue::MessageQueue;
 
 #[tokio::test]
 async fn test_queue_enqueue_and_drain() {

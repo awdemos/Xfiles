@@ -103,8 +103,7 @@ pub async fn chat_completions_handler(
         .map(|m| m.content.clone())
         .unwrap_or_default();
 
-    let msg = Message::new("proxy", "/ai/inference", "llm_request")
-        .with_data(&req);
+    let msg = Message::new("proxy", "/ai/inference", "llm_request").with_data(&req);
 
     // Collect healthy endpoint candidates, respecting circuit breaker
     let candidates: Vec<String> = state
@@ -165,7 +164,12 @@ pub async fn chat_completions_handler(
         Err(e) => {
             // Observe failure
             if let Some(ref q) = state.quantum {
-                q.observe(msg.conversation_id, &endpoint_id, false, start.elapsed().as_millis() as u64);
+                q.observe(
+                    msg.conversation_id,
+                    &endpoint_id,
+                    false,
+                    start.elapsed().as_millis() as u64,
+                );
             }
             if let Some(ref c) = state.circuit {
                 c.record_failure(&endpoint_id);
@@ -287,9 +291,7 @@ where
 }
 
 /// GET /v1/models — list available models from all healthy endpoints.
-pub async fn list_models_handler(
-    State(state): State<Arc<ProxyState>>,
-) -> impl IntoResponse {
+pub async fn list_models_handler(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
     let mut models = Vec::new();
 
     for ep in state.endpoints.iter() {

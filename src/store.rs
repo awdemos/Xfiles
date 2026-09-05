@@ -33,7 +33,10 @@ impl Store {
 
     pub async fn insert_message(&self, msg: &Message) -> anyhow::Result<()> {
         let headers = serde_json::to_string(&msg.headers).unwrap_or_default();
-        let quantum = msg.quantum.as_ref().map(|q| serde_json::to_string(q).unwrap_or_default());
+        let quantum = msg
+            .quantum
+            .as_ref()
+            .map(|q| serde_json::to_string(q).unwrap_or_default());
 
         sqlx::query(
             r#"
@@ -93,7 +96,7 @@ impl Store {
             SELECT endpoint_id, real_amplitude, imag_amplitude, pulls, total_reward
             FROM quantum_state
             WHERE conversation_id = ?1
-            "#
+            "#,
         )
         .bind(conversation_id.to_string())
         .fetch_all(&self.pool)
@@ -104,7 +107,10 @@ impl Store {
             map.insert(
                 row.endpoint_id,
                 EndpointState {
-                    amplitude: crate::quantum::state::Amplitude::new(row.real_amplitude, row.imag_amplitude),
+                    amplitude: crate::quantum::state::Amplitude::new(
+                        row.real_amplitude,
+                        row.imag_amplitude,
+                    ),
                     pulls: row.pulls as u64,
                     total_reward: row.total_reward,
                     last_updated: Utc::now(),
@@ -177,7 +183,7 @@ impl Store {
             SELECT COUNT(*), AVG(latency_ms)
             FROM feedback_events
             WHERE endpoint_id = ?1 AND success = 1
-            "#
+            "#,
         )
         .bind(endpoint_id)
         .fetch_one(&self.pool)
@@ -200,7 +206,7 @@ impl Store {
             UPDATE messages
             SET delivery_status = ?1, delivered_at = ?2
             WHERE id = ?3
-            "#
+            "#,
         )
         .bind(status)
         .bind(Utc::now().to_rfc3339())
@@ -222,7 +228,7 @@ impl Store {
             r#"
             INSERT INTO delivery_attempts (message_id, endpoint_id, agent_id, status, error)
             VALUES (?1, ?2, ?3, ?4, ?5)
-            "#
+            "#,
         )
         .bind(message_id.to_string())
         .bind(endpoint_id)
@@ -246,7 +252,7 @@ impl Store {
             GROUP BY conversation_id
             ORDER BY MAX(timestamp) DESC
             LIMIT ?1
-            "#
+            "#,
         )
         .bind(limit)
         .fetch_all(&self.pool)

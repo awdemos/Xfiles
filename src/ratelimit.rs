@@ -36,14 +36,18 @@ impl RateLimiter {
         let now = Instant::now();
         let window = Duration::from_secs(self.window_secs);
 
-        let mut entry = self.buckets.entry(key.to_string()).or_insert_with(|| TokenBucket {
-            tokens: self.max_requests,
-            last_refill: now,
-        });
+        let mut entry = self
+            .buckets
+            .entry(key.to_string())
+            .or_insert_with(|| TokenBucket {
+                tokens: self.max_requests,
+                last_refill: now,
+            });
 
         // Refill tokens based on elapsed time
         let elapsed = now.duration_since(entry.last_refill);
-        let refill = (elapsed.as_secs_f64() / window.as_secs_f64() * self.max_requests as f64) as u64;
+        let refill =
+            (elapsed.as_secs_f64() / window.as_secs_f64() * self.max_requests as f64) as u64;
         if refill > 0 {
             entry.tokens = (entry.tokens + refill).min(self.max_requests);
             entry.last_refill = now;

@@ -43,7 +43,8 @@ impl ProbeEngine {
         for mut entry in self.endpoints.iter_mut() {
             let endpoint = entry.value_mut();
             let start = std::time::Instant::now();
-            let result = self.client
+            let result = self
+                .client
                 .get(format!("{}/health", endpoint.url.trim_end_matches('/')))
                 .send()
                 .await;

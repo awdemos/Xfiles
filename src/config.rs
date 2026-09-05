@@ -138,8 +138,7 @@ impl Default for DiscoveryConfig {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
-        let config_path = std::env::var("XFILES_CONFIG")
-            .unwrap_or_else(|_| "xfiles.toml".into());
+        let config_path = std::env::var("XFILES_CONFIG").unwrap_or_else(|_| "xfiles.toml".into());
 
         if std::path::Path::new(&config_path).exists() {
             let contents = std::fs::read_to_string(&config_path)?;

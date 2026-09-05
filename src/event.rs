@@ -100,8 +100,8 @@ pub trait EventSink: Send + Sync {
     async fn write(&self, event: &Event) -> anyhow::Result<()>;
 }
 
-use std::sync::Arc;
 use crate::store::Store;
+use std::sync::Arc;
 
 /// Event sink that persists events to SQLite.
 pub struct StoreEventSink {

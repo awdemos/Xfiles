@@ -68,10 +68,7 @@ impl Plumber {
         // Match against a canonical string representation of the message
         let haystack = format!(
             "type:{} sender:{} path:{} data:{}",
-            msg.msg_type,
-            msg.sender,
-            msg.path,
-            msg.data
+            msg.msg_type, msg.sender, msg.path, msg.data
         );
         if !rule.pattern.is_match(&haystack) {
             return false;
@@ -92,7 +89,13 @@ impl Plumber {
 
     pub fn load_from_config(&self, rules: &[crate::config::PlumberRule]) -> anyhow::Result<()> {
         for r in rules {
-            self.add_rule(&r.name, &r.pattern, &r.destination, r.priority, r.header_match.clone())?;
+            self.add_rule(
+                &r.name,
+                &r.pattern,
+                &r.destination,
+                r.priority,
+                r.header_match.clone(),
+            )?;
         }
         Ok(())
     }

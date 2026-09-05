@@ -44,7 +44,9 @@ impl MessageQueue {
         let mut delivered = 0;
         if let Some(mut entry) = self.queues.get_mut(agent_id) {
             while let Some(qm) = entry.pop_front() {
-                if let Err(e) = tx.send(ProtocolOp::Message { msg: qm.msg.clone() }) {
+                if let Err(e) = tx.send(ProtocolOp::Message {
+                    msg: qm.msg.clone(),
+                }) {
                     tracing::warn!("failed to deliver queued message: {}", e);
                     // Re-queue at front
                     entry.push_front(qm);
@@ -58,7 +60,11 @@ impl MessageQueue {
             }
         }
         if delivered > 0 {
-            tracing::info!("delivered {} queued messages to agent {}", delivered, agent_id);
+            tracing::info!(
+                "delivered {} queued messages to agent {}",
+                delivered,
+                agent_id
+            );
         }
         delivered
     }

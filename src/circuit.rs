@@ -39,7 +39,11 @@ impl Default for EndpointCircuit {
 }
 
 impl CircuitBreaker {
-    pub fn new(failure_threshold: u32, recovery_timeout_secs: u64, half_open_max_calls: u32) -> Self {
+    pub fn new(
+        failure_threshold: u32,
+        recovery_timeout_secs: u64,
+        half_open_max_calls: u32,
+    ) -> Self {
         Self {
             state: Arc::new(DashMap::new()),
             failure_threshold,
@@ -105,7 +109,10 @@ impl CircuitBreaker {
 
         if entry.state == CircuitState::HalfOpen {
             entry.state = CircuitState::Open;
-            tracing::warn!("circuit opened for endpoint {} (half-open failure)", endpoint_id);
+            tracing::warn!(
+                "circuit opened for endpoint {} (half-open failure)",
+                endpoint_id
+            );
         } else if entry.failures >= self.failure_threshold {
             entry.state = CircuitState::Open;
             tracing::warn!(

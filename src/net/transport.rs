@@ -59,30 +59,28 @@ pub async fn handle_socket(socket: WebSocket, agent_id: String, state: Arc<Trans
 
     while let Some(Ok(msg)) = receiver.next().await {
         match msg {
-            WsMessage::Text(text) => {
-                match parse_frame(&text) {
-                    Ok(op) => {
-                        handle_op(
-                            op,
-                            &agent_id,
-                            &agents,
-                            &vfs,
-                            &plumber,
-                            quantum.as_deref(),
-                            &queue,
-                            &tx,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("protocol parse error: {}", e);
-                        let _ = tx.send(ProtocolOp::Error {
-                            code: "parse_error".into(),
-                            message: e.to_string(),
-                        });
-                    }
+            WsMessage::Text(text) => match parse_frame(&text) {
+                Ok(op) => {
+                    handle_op(
+                        op,
+                        &agent_id,
+                        &agents,
+                        &vfs,
+                        &plumber,
+                        quantum.as_deref(),
+                        &queue,
+                        &tx,
+                    )
+                    .await;
                 }
-            }
+                Err(e) => {
+                    tracing::warn!("protocol parse error: {}", e);
+                    let _ = tx.send(ProtocolOp::Error {
+                        code: "parse_error".into(),
+                        message: e.to_string(),
+                    });
+                }
+            },
             WsMessage::Close(_) => break,
             _ => {}
         }
@@ -95,6 +93,7 @@ pub async fn handle_socket(socket: WebSocket, agent_id: String, state: Arc<Trans
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_op(
     op: ProtocolOp,
     agent_id: &str,

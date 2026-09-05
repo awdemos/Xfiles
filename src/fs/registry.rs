@@ -28,7 +28,10 @@ impl VfsRegistry {
 
         // Core control files
         self.add_node("/ctl/status", Vnode::new_ctl("status", "ok"));
-        self.add_node("/ctl/shutdown", Vnode::new_ctl("shutdown", "write 1 to shutdown"));
+        self.add_node(
+            "/ctl/shutdown",
+            Vnode::new_ctl("shutdown", "write 1 to shutdown"),
+        );
         self.add_node("/plumber/rules", Vnode::new_file("rules", b"[]".to_vec()));
     }
 
@@ -98,11 +101,26 @@ impl VfsRegistry {
     pub fn mount_agent_ns(&self, agent_id: &str, hostname: &str) {
         let base = format!("/net/{}", agent_id);
         self.mkdir(&base);
-        self.add_node(&format!("{}/hostname", base), Vnode::new_file("hostname", hostname.as_bytes().to_vec()));
-        self.add_node(&format!("{}/ctl/status", base), Vnode::new_ctl("status", "connected"));
-        self.add_node(&format!("{}/ctl/capabilities", base), Vnode::new_file("capabilities", b"[]".to_vec()));
-        self.add_node(&format!("{}/msg/inbox", base), Vnode::new_file("inbox", b"".to_vec()));
-        self.add_node(&format!("{}/msg/outbox", base), Vnode::new_file("outbox", b"".to_vec()));
+        self.add_node(
+            &format!("{}/hostname", base),
+            Vnode::new_file("hostname", hostname.as_bytes().to_vec()),
+        );
+        self.add_node(
+            &format!("{}/ctl/status", base),
+            Vnode::new_ctl("status", "connected"),
+        );
+        self.add_node(
+            &format!("{}/ctl/capabilities", base),
+            Vnode::new_file("capabilities", b"[]".to_vec()),
+        );
+        self.add_node(
+            &format!("{}/msg/inbox", base),
+            Vnode::new_file("inbox", b"".to_vec()),
+        );
+        self.add_node(
+            &format!("{}/msg/outbox", base),
+            Vnode::new_file("outbox", b"".to_vec()),
+        );
     }
 
     pub fn unmount_agent_ns(&self, agent_id: &str) {
@@ -165,4 +183,3 @@ fn child_name(parent: &str, full: &str) -> Option<String> {
     }
     Some(remainder.to_string())
 }
-
