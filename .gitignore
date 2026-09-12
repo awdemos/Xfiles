@@ -8,6 +8,3 @@ Cargo.lock
 
 # Integration test data
 integrations/data/
-
-# Environment-managed cargo config (points target dir outside the repo)
-.cargo/
