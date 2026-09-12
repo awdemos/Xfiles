@@ -1,18 +1,20 @@
+use dashmap::DashMap;
 use std::sync::Arc;
 use xfiles::agent::AgentRegistry;
 use xfiles::ai::endpoints::{AiEndpoint, EndpointType};
 use xfiles::circuit::CircuitBreaker;
-use xfiles::config::{Config, HubConfig, QuantumConfig, CircuitBreakerConfig, RateLimitConfig, AuthConfig};
+use xfiles::config::{
+    AuthConfig, CircuitBreakerConfig, Config, HubConfig, QuantumConfig, RateLimitConfig,
+};
 use xfiles::event::{Event, EventEmitter, EventKind, TracingEventEmitter};
 use xfiles::fs::VfsRegistry;
-use xfiles::message::Message;
 use xfiles::mcp::McpRegistry;
+use xfiles::message::Message;
 use xfiles::plumber::Plumber;
 use xfiles::queue::MessageQueue;
-use xfiles::router::{default_pipeline, RoutingPipeline};
+use xfiles::router::default_pipeline;
 use xfiles::state::StateManager;
 use xfiles::store::Store;
-use dashmap::DashMap;
 
 fn test_config() -> Config {
     Config {
@@ -67,16 +69,26 @@ async fn test_routing_pipeline_selects_endpoint() {
     let endpoints = build_test_endpoints();
     let mcp = Arc::new(McpRegistry::new());
     let plumber = Plumber::new();
-    plumber.add_rule("ai", "llm_request", "ep-a", 1, None).unwrap();
-    plumber.add_rule("ai", "llm_request", "ep-b", 1, None).unwrap();
+    plumber
+        .add_rule("ai", "llm_request", "ep-a", 1, None)
+        .unwrap();
+    plumber
+        .add_rule("ai", "llm_request", "ep-b", 1, None)
+        .unwrap();
     let pipeline = default_pipeline(mcp, plumber, None, None, endpoints);
 
     let msg = Message::new("test", "/ai", "llm_request");
     let decision = pipeline.route(&msg).await;
 
-    assert!(decision.selected.is_some(), "pipeline should select an endpoint");
+    assert!(
+        decision.selected.is_some(),
+        "pipeline should select an endpoint"
+    );
     let selected = decision.selected.unwrap();
-    assert!(selected == "ep-a" || selected == "ep-b", "selected should be one of the test endpoints");
+    assert!(
+        selected == "ep-a" || selected == "ep-b",
+        "selected should be one of the test endpoints"
+    );
 }
 
 #[tokio::test]
@@ -128,14 +140,69 @@ async fn test_circuit_breaker_filters_unhealthy() {
     let circuit = Arc::new(CircuitBreaker::new(3, 60, 1));
     let mcp = Arc::new(McpRegistry::new());
     let plumber = Plumber::new();
-    plumber.add_rule("ai", "llm_request", "ep-a", 1, None).unwrap();
-    plumber.add_rule("ai", "llm_request", "ep-b", 1, None).unwrap();
+    plumber
+        .add_rule("ai", "llm_request", "ep-a", 1, None)
+        .unwrap();
+    plumber
+        .add_rule("ai", "llm_request", "ep-b", 1, None)
+        .unwrap();
     let pipeline = default_pipeline(mcp, plumber, None, Some(circuit), endpoints.clone());
 
     let msg = Message::new("test", "/ai", "llm_request");
     let decision = pipeline.route(&msg).await;
 
-    assert_eq!(decision.selected, Some("ep-b".into()), "offline endpoint should be filtered out");
+    assert_eq!(
+        decision.selected,
+        Some("ep-b".into()),
+        "offline endpoint should be filtered out"
+    );
 }
 
+#[tokio::test]
+async fn test_circuit_breaker_filters_unhealthy_with_quantum_enabled() {
+    let endpoints = build_test_endpoints();
 
+    {
+        let mut ep = endpoints.get_mut("ep-a").unwrap();
+        ep.health.status = xfiles::ai::endpoints::HealthStatus::Offline;
+    }
+
+    let store = Arc::new(Store::new(":memory:").await.expect("create store"));
+    let quantum = Arc::new(xfiles::quantum::QuantumRouter::new(
+        endpoints.clone(),
+        QuantumConfig {
+            exploration_rate: 0.0,
+            decoherence_rate: 0.0,
+            ..Default::default()
+        },
+        store,
+    ));
+
+    // Bias quantum strongly toward the offline endpoint so a health-blind
+    // quantum stage would pick it.
+    let conv = uuid::Uuid::new_v4();
+    for _ in 0..5 {
+        quantum.observe(conv, "ep-a", true, 0);
+    }
+    quantum.observe(conv, "ep-b", false, 5000);
+
+    let circuit = Arc::new(CircuitBreaker::new(3, 60, 1));
+    let mcp = Arc::new(McpRegistry::new());
+    let plumber = Plumber::new();
+    plumber
+        .add_rule("ai", "llm_request", "ep-a", 1, None)
+        .unwrap();
+    plumber
+        .add_rule("ai", "llm_request", "ep-b", 1, None)
+        .unwrap();
+    let pipeline = default_pipeline(mcp, plumber, Some(quantum), Some(circuit), endpoints);
+
+    let msg = Message::new("test", "/ai", "llm_request").with_conversation(conv);
+    let decision = pipeline.route(&msg).await;
+
+    assert_eq!(
+        decision.selected,
+        Some("ep-b".into()),
+        "offline endpoint should be filtered out when quantum routing is enabled"
+    );
+}

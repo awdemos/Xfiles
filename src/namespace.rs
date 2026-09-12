@@ -26,6 +26,7 @@ impl NamespaceManager {
     pub fn create_namespace(&self, manifest: &CapabilityManifest) -> String {
         let ns = format!("/net/{}", manifest.agent_id);
         self.vfs.mkdir(&ns);
+        self.vfs.mkdir(&format!("{}/ctl", ns));
         self.vfs.add_node(
             &format!("{}/hostname", ns),
             crate::fs::vnode::Vnode::new_file("hostname", manifest.hostname.as_bytes().to_vec()),
@@ -73,7 +74,6 @@ impl NamespaceManager {
 
     pub fn remove_namespace(&self, agent_id: &str) {
         if let Some((_, ns)) = self.bindings.remove(agent_id) {
-            self.vfs.unmount_agent_ns(agent_id);
             // Also clean up the namespace root if different
             let _ = ns;
         }

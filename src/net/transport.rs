@@ -57,10 +57,10 @@ pub async fn handle_socket(socket: WebSocket, agent_id: String, state: Arc<Trans
     let quantum = state.quantum.clone();
     let queue = state.queue.clone();
 
-    while let Some(Ok(msg)) = receiver.next().await {
-        match msg {
-            WsMessage::Text(text) => {
-                match parse_frame(&text) {
+    loop {
+        match receiver.next().await {
+            Some(Ok(msg)) => match msg {
+                WsMessage::Text(text) => match parse_frame(&text) {
                     Ok(op) => {
                         handle_op(
                             op,
@@ -81,20 +81,37 @@ pub async fn handle_socket(socket: WebSocket, agent_id: String, state: Arc<Trans
                             message: e.to_string(),
                         });
                     }
-                }
+                },
+                WsMessage::Close(_) => break,
+                _ => {}
+            },
+            Some(Err(e)) => {
+                tracing::warn!("websocket error for agent {}: {}", agent_id, e);
+                break;
             }
-            WsMessage::Close(_) => break,
-            _ => {}
+            None => break,
         }
     }
 
     // Clean up
     send_task.abort();
-    if let Some(agent) = agents.unregister(&agent_id) {
-        tracing::info!("agent {} disconnected", agent.id);
+    match agents.get(&agent_id).and_then(|a| a.tx) {
+        Some(stored) if stored.same_channel(&tx) => {
+            if let Some(agent) = agents.unregister(&agent_id) {
+                tracing::info!("agent {} disconnected", agent.id);
+            }
+        }
+        Some(_) => {
+            tracing::warn!(
+                "ignoring teardown of superseded connection for agent {}",
+                agent_id
+            );
+        }
+        None => {}
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_op(
     op: ProtocolOp,
     agent_id: &str,

@@ -40,40 +40,60 @@ impl ProbeEngine {
     }
 
     pub async fn probe_all(&self) {
-        for mut entry in self.endpoints.iter_mut() {
-            let endpoint = entry.value_mut();
+        let targets: Vec<(String, String)> = self
+            .endpoints
+            .iter()
+            .map(|e| (e.key().clone(), e.value().url.clone()))
+            .collect();
+
+        for (id, url) in targets {
             let start = std::time::Instant::now();
-            let result = self.client
-                .get(format!("{}/health", endpoint.url.trim_end_matches('/')))
+            let result = self
+                .client
+                .get(format!("{}/health", url.trim_end_matches('/')))
                 .send()
                 .await;
 
             let latency = start.elapsed().as_millis() as u64;
-            endpoint.health.last_checked = chrono::Utc::now();
+            let now = chrono::Utc::now();
+
+            let mut entry = match self.endpoints.get_mut(&id) {
+                Some(entry) => entry,
+                None => continue,
+            };
+            let endpoint = entry.value_mut();
+            endpoint.health.last_checked = now;
             endpoint.health.probe_latency_ms = latency;
 
             match result {
                 Ok(resp) if resp.status().is_success() => {
                     endpoint.health.consecutive_failures = 0;
                     endpoint.health.status = HealthStatus::Healthy;
+                    endpoint.health.offline_since = None;
                     endpoint.health.last_error = None;
                 }
                 Ok(resp) => {
                     endpoint.health.consecutive_failures += 1;
-                    endpoint.health.status = if endpoint.health.consecutive_failures >= 3 {
-                        HealthStatus::Offline
+                    if endpoint.health.consecutive_failures >= 3 {
+                        if endpoint.health.status != HealthStatus::Offline {
+                            endpoint.health.offline_since = Some(now);
+                        }
+                        endpoint.health.status = HealthStatus::Offline;
                     } else {
-                        HealthStatus::Degraded
-                    };
+                        endpoint.health.status = HealthStatus::Degraded;
+                    }
                     endpoint.health.last_error = Some(format!("HTTP {}", resp.status()));
                 }
                 Err(e) => {
                     endpoint.health.consecutive_failures += 1;
-                    endpoint.health.status = if endpoint.health.consecutive_failures >= 3 {
-                        HealthStatus::Offline
+                    if endpoint.health.consecutive_failures >= 3 {
+                        if endpoint.health.status != HealthStatus::Offline {
+                            endpoint.health.offline_since = Some(now);
+                        }
+                        endpoint.health.status = HealthStatus::Offline;
                     } else {
-                        HealthStatus::Degraded
-                    };
+                        endpoint.health.status = HealthStatus::Degraded;
+                    }
                     endpoint.health.last_error = Some(e.to_string());
                 }
             }
@@ -88,7 +108,8 @@ impl ProbeEngine {
             .iter()
             .filter(|e| {
                 e.health.status == HealthStatus::Offline
-                    && (now - e.health.last_checked).num_seconds() > max_offline_secs
+                    && (now - e.health.offline_since.unwrap_or(e.health.last_checked)).num_seconds()
+                        > max_offline_secs
             })
             .map(|e| e.key().clone())
             .collect();

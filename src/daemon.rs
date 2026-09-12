@@ -1,26 +1,26 @@
 use crate::agent::AgentRegistry;
 use crate::ai::{AiEndpoint, DiscoveryEngine, ProbeEngine};
-use crate::auth::{AuthConfig, api_key_middleware};
+use crate::auth::{api_key_middleware, AuthConfig};
 use crate::circuit::CircuitBreaker;
 use crate::config::Config;
 use crate::docker::DockerDiscovery;
 use crate::fs::VfsRegistry;
-use crate::grpc::{GrpcCodec, GrpcResponse, GrpcStatus, decode_message};
+use crate::grpc::{decode_message, GrpcCodec, GrpcResponse, GrpcStatus};
 use crate::mcp::McpRegistry;
-use crate::net::transport::{TransportState, handle_socket};
+use crate::net::transport::{handle_socket, TransportState};
 use crate::plumber::Plumber;
 use crate::proxy::{chat_completions_handler, list_models_handler, ProxyState};
 use crate::quantum::QuantumRouter;
 use crate::queue::MessageQueue;
-use crate::ratelimit::{RateLimiter, rate_limit_middleware};
-use crate::router::{RoutingPipeline, default_pipeline};
+use crate::ratelimit::{rate_limit_middleware, RateLimiter};
+use crate::router::{default_pipeline, RoutingPipeline};
 use crate::state::StateManager;
 use crate::store::Store;
 use axum::{
     body::Body,
-    extract::{DefaultBodyLimit, Path, State},
     extract::ws::WebSocketUpgrade,
-    http::{StatusCode, header},
+    extract::{DefaultBodyLimit, Path, State},
+    http::{header, StatusCode},
     middleware::from_fn_with_state,
     response::IntoResponse,
     routing::{get, post},
@@ -66,7 +66,10 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     // SQLite store - now required for data integrity
     let store = Arc::new(Store::new(&config.hub.database_url).await.map_err(|e| {
-        anyhow::anyhow!("SQLite store failed to initialize: {}. Persistence is required.", e)
+        anyhow::anyhow!(
+            "SQLite store failed to initialize: {}. Persistence is required.",
+            e
+        )
     })?);
     tracing::info!("SQLite store initialized at {}", config.hub.database_url);
 
@@ -98,7 +101,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         mcp_registry.register(ep.value().clone());
     }
     // Discover and index tools asynchronously
-    mcp_registry.discover_and_index().await;
+    if let Err(e) =
+        tokio::time::timeout(Duration::from_secs(10), mcp_registry.discover_and_index()).await
+    {
+        tracing::warn!("MCP tool discovery timed out or failed: {}", e);
+    }
     let mcp = Arc::new(mcp_registry);
 
     // Quantum router
@@ -210,26 +217,37 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .route("/endpoints", get(endpoints_handler))
         .route("/mcp/tools", get(mcp_tools_handler))
         .route("/conversations", get(conversations_handler))
-        .route("/conversations/:id/messages", get(conversation_messages_handler))
-        .route("/conversations/:id/quantum-state", get(conversation_quantum_handler))
-        .route("/ws/{agent_id}", get(ws_handler_wrapped))
+        .route(
+            "/conversations/:id/messages",
+            get(conversation_messages_handler),
+        )
+        .route(
+            "/conversations/:id/quantum-state",
+            get(conversation_quantum_handler),
+        )
+        .route("/ws/:agent_id", get(ws_handler_wrapped))
         .nest("/api/v1", api_router)
         .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(tower_http::timeout::TimeoutLayer::new(Duration::from_secs(30)))
+        .layer(tower_http::timeout::TimeoutLayer::new(Duration::from_secs(
+            120,
+        )))
         .with_state(app_state.clone());
 
     // Apply rate limiting if enabled
     if config.rate_limit.enabled {
-        app = app.layer(from_fn_with_state(rate_limiter.clone(), rate_limit_middleware));
+        app = app.layer(from_fn_with_state(
+            rate_limiter.clone(),
+            rate_limit_middleware,
+        ));
     }
 
     // Apply auth middleware
     app = app.layer(from_fn_with_state(auth_config.clone(), api_key_middleware));
 
     // Shutdown channels
-    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let (probe_shutdown_tx, probe_shutdown_rx) = tokio::sync::watch::channel(false);
     let (discovery_shutdown_tx, discovery_shutdown_rx) = tokio::sync::watch::channel(false);
     let (docker_shutdown_tx, docker_shutdown_rx) = tokio::sync::watch::channel(false);
@@ -248,15 +266,20 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     // Background: probe pruning (remove long-offline endpoints)
     let endpoints_prune = endpoints.clone();
+    let mut prune_rx = shutdown_rx.clone();
     let prune_handle = tokio::spawn(async move {
+        let engine = ProbeEngine::new(endpoints_prune.clone());
         let mut ticker = tokio::time::interval(Duration::from_secs(300));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            ticker.tick().await;
-            let engine = ProbeEngine::new(endpoints_prune.clone());
-            let pruned = engine.prune_offline(600);
-            if pruned > 0 {
-                tracing::info!("pruned {} offline endpoints", pruned);
+            tokio::select! {
+                _ = prune_rx.changed() => break,
+                _ = ticker.tick() => {
+                    let pruned = engine.prune_offline(600);
+                    if pruned > 0 {
+                        tracing::info!("pruned {} offline endpoints", pruned);
+                    }
+                }
             }
         }
     });
@@ -290,12 +313,17 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     // Background: quantum maintenance
     let quantum_handle = quantum.clone().map(|q| {
+        let mut quantum_rx = shutdown_rx.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(60));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
-                ticker.tick().await;
-                q.tick();
+                tokio::select! {
+                    _ = quantum_rx.changed() => break,
+                    _ = ticker.tick() => {
+                        q.tick();
+                    }
+                }
             }
         })
     });
@@ -303,27 +331,38 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     // Background: heartbeat cleanup
     let agents_cleanup = agents.clone();
     let heartbeat_interval = Duration::from_secs(config.hub.heartbeat_interval_secs);
+    let stale_secs = std::cmp::max(2 * config.hub.heartbeat_interval_secs, 120) as i64;
+    let mut cleanup_rx = shutdown_rx.clone();
     let cleanup_handle = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(heartbeat_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            ticker.tick().await;
-            let stale = agents_cleanup.stale_agents(120);
-            for id in stale {
-                tracing::info!("pruning stale agent: {}", id);
-                agents_cleanup.unregister(&id);
+            tokio::select! {
+                _ = cleanup_rx.changed() => break,
+                _ = ticker.tick() => {
+                    let stale = agents_cleanup.stale_agents(stale_secs);
+                    for id in stale {
+                        tracing::info!("pruning stale agent: {}", id);
+                        agents_cleanup.unregister(&id);
+                    }
+                }
             }
         }
     });
 
     // Background: queue pruning
     let queue_prune = queue.clone();
+    let mut queue_rx = shutdown_rx.clone();
     let queue_cleanup = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(60));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            ticker.tick().await;
-            queue_prune.prune_old(3600);
+            tokio::select! {
+                _ = queue_rx.changed() => break,
+                _ = ticker.tick() => {
+                    queue_prune.prune_old(3600);
+                }
+            }
         }
     });
 
@@ -336,18 +375,20 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     }
     .to_tls_config()?;
 
+    let server_handle = axum_server::Handle::new();
     let server_future: tokio::task::JoinHandle<anyhow::Result<()>> = if let Some(tls) = tls_config {
         let rustls_config = crate::tls::build_tls_config(&tls)?;
-        let rustls_config = axum_server::tls_rustls::RustlsConfig::from_config(
-            std::sync::Arc::new(rustls_config)
-        );
+        let rustls_config =
+            axum_server::tls_rustls::RustlsConfig::from_config(std::sync::Arc::new(rustls_config));
         let bind_addr = config.hub.bind_addr;
         tracing::info!("Xfiles listening on {} (TLS enabled)", bind_addr);
         if tls.client_ca_path.is_some() {
             tracing::info!("mTLS client certificate verification enabled");
         }
+        let tls_server_handle = server_handle.clone();
         tokio::spawn(async move {
             axum_server::bind_rustls(bind_addr, rustls_config)
+                .handle(tls_server_handle)
                 .serve(app.into_make_service_with_connect_info::<SocketAddr>())
                 .await
                 .map_err(|e| anyhow::anyhow!("server error: {}", e))?;
@@ -356,10 +397,17 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     } else {
         let listener = TcpListener::bind(config.hub.bind_addr).await?;
         tracing::info!("Xfiles listening on {}", config.hub.bind_addr);
+        let mut shutdown_rx = shutdown_rx.clone();
         tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-                .await
-                .map_err(|e| anyhow::anyhow!("server error: {}", e))?;
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                shutdown_rx.changed().await.ok();
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("server error: {}", e))?;
             Ok(())
         })
     };
@@ -389,6 +437,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         let _ = probe_shutdown_tx.send(true);
         let _ = discovery_shutdown_tx.send(true);
         let _ = docker_shutdown_tx.send(true);
+        server_handle.graceful_shutdown(Some(Duration::from_secs(5)));
     });
 
     server_future.await??;
@@ -444,13 +493,22 @@ async fn fs_read_handler(
     if let Some(node) = vfs.get(&path) {
         if node.is_dir() {
             let children = vfs.list(&path);
-            (StatusCode::OK, Json(serde_json::json!({"path": path, "type": "dir", "children": children })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"path": path, "type": "dir", "children": children })),
+            )
         } else {
             let data = node.read().await;
-            (StatusCode::OK, Json(serde_json::json!({"path": path, "data": String::from_utf8_lossy(&data) })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"path": path, "data": String::from_utf8_lossy(&data) })),
+            )
         }
     } else {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found", "path": path })))
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not found", "path": path })),
+        )
     }
 }
 
@@ -462,14 +520,26 @@ async fn fs_write_handler(
     let vfs = state.state_manager.vfs();
     if let Some(node) = vfs.get(&path) {
         if node.is_dir() {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "cannot write to directory", "path": path })));
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "cannot write to directory", "path": path })),
+            );
         }
         match node.write(body.into_bytes()).await {
-            Ok(()) => (StatusCode::OK, Json(serde_json::json!({"path": path, "status": "written" }))),
-            Err(e) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e.to_string(), "path": path }))),
+            Ok(()) => (
+                StatusCode::OK,
+                Json(serde_json::json!({"path": path, "status": "written" })),
+            ),
+            Err(e) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e.to_string(), "path": path })),
+            ),
         }
     } else {
-        (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "not found", "path": path })))
+        (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "not found", "path": path })),
+        )
     }
 }
 
@@ -480,7 +550,9 @@ async fn msg_handler(
     let store = state.state_manager.store().clone();
     let msg_clone = msg.clone();
     tokio::spawn(async move {
-        let _ = store.insert_message(&msg_clone).await;
+        if let Err(e) = store.insert_message(&msg_clone).await {
+            tracing::warn!("failed to persist message: {}", e);
+        }
     });
 
     let decision = state.pipeline.route(&msg).await;
@@ -493,10 +565,21 @@ async fn msg_handler(
                 let target_agent = parts[2];
                 if let Some(target) = state.state_manager.agents().get(target_agent) {
                     if let Some(target_tx) = target.tx {
-                        let _ = target_tx.send(crate::net::protocol::ProtocolOp::Message { msg: msg.clone() });
+                        if let Err(e) = target_tx
+                            .send(crate::net::protocol::ProtocolOp::Message { msg: msg.clone() })
+                        {
+                            tracing::warn!("failed to deliver message to {}: {}", target_agent, e);
+                            state
+                                .state_manager
+                                .queue()
+                                .enqueue(target_agent, msg.clone());
+                        }
                     }
                 } else {
-                    state.state_manager.queue().enqueue(target_agent, msg.clone());
+                    state
+                        .state_manager
+                        .queue()
+                        .enqueue(target_agent, msg.clone());
                 }
             }
         }
@@ -513,9 +596,7 @@ async fn msg_handler(
     (StatusCode::OK, Json(resp))
 }
 
-async fn quantum_state_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn quantum_state_handler(State(state): State<AppState>) -> impl IntoResponse {
     match state.state_manager.quantum() {
         Some(q) => {
             let diagnostics = q.all_diagnostics();
@@ -551,9 +632,7 @@ async fn quantum_state_handler(
     }
 }
 
-async fn proxy_models_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn proxy_models_handler(State(state): State<AppState>) -> impl IntoResponse {
     list_models_handler(State(state.proxy)).await
 }
 
@@ -580,19 +659,24 @@ async fn quantum_feedback_handler(
             let store = state.state_manager.store().clone();
             let fb_clone = feedback.clone();
             tokio::spawn(async move {
-                let _ = store.insert_feedback(&fb_clone).await;
+                if let Err(e) = store.insert_feedback(&fb_clone).await {
+                    tracing::warn!("failed to persist feedback: {}", e);
+                }
             });
 
-            (StatusCode::OK, Json(serde_json::json!({"status": "observed"})))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"status": "observed"})),
+            )
         }
-        None => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "quantum mode disabled"}))),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "quantum mode disabled"})),
+        ),
     }
 }
 
-async fn grpc_handler(
-    State(state): State<AppState>,
-    body: axum::body::Bytes,
-) -> impl IntoResponse {
+async fn grpc_handler(State(state): State<AppState>, body: axum::body::Bytes) -> impl IntoResponse {
     let codec = GrpcCodec::new();
     let req = match codec.decode_request(&body) {
         Ok(r) => r,
@@ -613,30 +697,62 @@ async fn grpc_handler(
     };
 
     let resp = match req.method.as_str() {
-        "xfiles.Message/Send" => {
-            match decode_message(&req.body) {
-                Ok(msg) => {
-                    let destinations = state.transport.plumber.route(&msg);
-                    let _selected = if let Some(ref q) = state.transport.quantum {
-                        q.route(&msg, &destinations)
-                    } else {
-                        destinations.first().cloned()
-                    };
-                    GrpcResponse {
-                        status: GrpcStatus::Ok,
-                        headers: vec![],
-                        body: b"ok".to_vec(),
-                        trailers: vec![],
+        "xfiles.Message/Send" => match decode_message(&req.body) {
+            Ok(msg) => {
+                let destinations = state.transport.plumber.route(&msg);
+                let selected = if let Some(ref q) = state.transport.quantum {
+                    q.route(&msg, &destinations)
+                } else {
+                    destinations.first().cloned()
+                };
+                match selected {
+                    Some(dest) => {
+                        if dest.starts_with("/net/") {
+                            let parts: Vec<&str> = dest.split('/').collect();
+                            if parts.len() >= 3 {
+                                let target_agent = parts[2];
+                                let sent = state
+                                    .state_manager
+                                    .agents()
+                                    .get(target_agent)
+                                    .and_then(|t| t.tx)
+                                    .map(|tx| {
+                                        tx.send(crate::net::protocol::ProtocolOp::Message {
+                                            msg: msg.clone(),
+                                        })
+                                        .is_ok()
+                                    })
+                                    .unwrap_or(false);
+                                if !sent {
+                                    state
+                                        .state_manager
+                                        .queue()
+                                        .enqueue(target_agent, msg.clone());
+                                }
+                            }
+                        }
+                        GrpcResponse {
+                            status: GrpcStatus::Ok,
+                            headers: vec![],
+                            body: b"ok".to_vec(),
+                            trailers: vec![],
+                        }
                     }
+                    None => GrpcResponse {
+                        status: GrpcStatus::NotFound,
+                        headers: vec![],
+                        body: b"no route".to_vec(),
+                        trailers: vec![],
+                    },
                 }
-                Err(e) => GrpcResponse {
-                    status: GrpcStatus::InvalidArgument,
-                    headers: vec![],
-                    body: format!("bad message: {}", e).into_bytes(),
-                    trailers: vec![],
-                },
             }
-        }
+            Err(e) => GrpcResponse {
+                status: GrpcStatus::InvalidArgument,
+                headers: vec![],
+                body: format!("bad message: {}", e).into_bytes(),
+                trailers: vec![],
+            },
+        },
         _ => GrpcResponse {
             status: GrpcStatus::Unimplemented,
             headers: vec![],
@@ -653,9 +769,7 @@ async fn grpc_handler(
         .unwrap()
 }
 
-async fn agents_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn agents_handler(State(state): State<AppState>) -> impl IntoResponse {
     let agents: Vec<serde_json::Value> = state
         .state_manager
         .agents()
@@ -674,9 +788,7 @@ async fn agents_handler(
     Json(serde_json::json!({ "agents": agents }))
 }
 
-async fn endpoints_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn endpoints_handler(State(state): State<AppState>) -> impl IntoResponse {
     let endpoints: Vec<serde_json::Value> = state
         .state_manager
         .endpoints()
@@ -711,7 +823,12 @@ async fn conversation_messages_handler(
 ) -> impl IntoResponse {
     let cid = match id.parse::<uuid::Uuid>() {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid uuid"}))),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "invalid uuid"})),
+            )
+        }
     };
 
     let store = state.state_manager.store();
@@ -732,9 +849,15 @@ async fn conversation_messages_handler(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({ "messages": messages })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "messages": messages })),
+            )
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
     }
 }
 
@@ -744,7 +867,12 @@ async fn conversation_quantum_handler(
 ) -> impl IntoResponse {
     let cid = match id.parse::<uuid::Uuid>() {
         Ok(u) => u,
-        Err(_) => return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid uuid"}))),
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "invalid uuid"})),
+            )
+        }
     };
 
     match state.state_manager.quantum() {
@@ -761,15 +889,19 @@ async fn conversation_quantum_handler(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({ "conversation_id": cid, "endpoints": endpoints })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "conversation_id": cid, "endpoints": endpoints })),
+            )
         }
-        None => (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "quantum mode disabled"}))),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "quantum mode disabled"})),
+        ),
     }
 }
 
-async fn conversations_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn conversations_handler(State(state): State<AppState>) -> impl IntoResponse {
     let store = state.state_manager.store();
     match store.list_conversations(100).await {
         Ok(convs) => {
@@ -782,15 +914,19 @@ async fn conversations_handler(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({ "conversations": conversations })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "conversations": conversations })),
+            )
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e.to_string()}))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        ),
     }
 }
 
-async fn circuit_state_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn circuit_state_handler(State(state): State<AppState>) -> impl IntoResponse {
     match state.state_manager.circuit() {
         Some(c) => {
             let diag = c.diagnostics();
@@ -809,15 +945,19 @@ async fn circuit_state_handler(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(serde_json::json!({ "circuits": circuits })))
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "circuits": circuits })),
+            )
         }
-        None => (StatusCode::OK, Json(serde_json::json!({ "status": "disabled" }))),
+        None => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "disabled" })),
+        ),
     }
 }
 
-async fn mcp_tools_handler(
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+async fn mcp_tools_handler(State(state): State<AppState>) -> impl IntoResponse {
     let tools: Vec<serde_json::Value> = state
         .state_manager
         .mcp()

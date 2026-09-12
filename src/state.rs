@@ -2,7 +2,7 @@ use crate::agent::AgentRegistry;
 use crate::ai::endpoints::AiEndpoint;
 use crate::circuit::CircuitBreaker;
 use crate::config::Config;
-use crate::event::{EventEmitter, Event};
+use crate::event::{Event, EventEmitter};
 use crate::fs::VfsRegistry;
 use crate::mcp::McpRegistry;
 use crate::plumber::Plumber;
@@ -54,6 +54,7 @@ impl std::fmt::Debug for StateManagerInner {
 }
 
 impl StateManager {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agents: AgentRegistry,
         endpoints: Arc<DashMap<String, AiEndpoint>>,

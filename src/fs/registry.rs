@@ -28,7 +28,10 @@ impl VfsRegistry {
 
         // Core control files
         self.add_node("/ctl/status", Vnode::new_ctl("status", "ok"));
-        self.add_node("/ctl/shutdown", Vnode::new_ctl("shutdown", "write 1 to shutdown"));
+        self.add_node(
+            "/ctl/shutdown",
+            Vnode::new_ctl("shutdown", "write 1 to shutdown"),
+        );
         self.add_node("/plumber/rules", Vnode::new_file("rules", b"[]".to_vec()));
     }
 
@@ -54,7 +57,14 @@ impl VfsRegistry {
     }
 
     pub fn remove(&self, path: &str) -> Option<Vnode> {
-        self.nodes.remove(&normalize(path)).map(|(_, v)| v)
+        let path = normalize(path);
+        let removed = self.nodes.remove(&path).map(|(_, v)| v);
+        if removed.is_some() {
+            if let Some(parent) = parent_path(&path) {
+                self.unlink_child(parent, &path);
+            }
+        }
+        removed
     }
 
     pub fn exists(&self, path: &str) -> bool {
@@ -95,26 +105,62 @@ impl VfsRegistry {
         }
     }
 
+    fn unlink_child(&self, parent: String, child: &str) {
+        if let Some(node) = self.nodes.get(&parent) {
+            if let Vnode::Dir(ref dir) = *node {
+                let child_name = child.rsplit('/').next().unwrap_or(child).to_string();
+                if let Ok(mut guard) = dir.children.try_write() {
+                    guard.retain(|c| *c != child_name);
+                }
+            }
+        }
+    }
+
     pub fn mount_agent_ns(&self, agent_id: &str, hostname: &str) {
         let base = format!("/net/{}", agent_id);
         self.mkdir(&base);
-        self.add_node(&format!("{}/hostname", base), Vnode::new_file("hostname", hostname.as_bytes().to_vec()));
-        self.add_node(&format!("{}/ctl/status", base), Vnode::new_ctl("status", "connected"));
-        self.add_node(&format!("{}/ctl/capabilities", base), Vnode::new_file("capabilities", b"[]".to_vec()));
-        self.add_node(&format!("{}/msg/inbox", base), Vnode::new_file("inbox", b"".to_vec()));
-        self.add_node(&format!("{}/msg/outbox", base), Vnode::new_file("outbox", b"".to_vec()));
+        self.mkdir(&format!("{}/ctl", base));
+        self.mkdir(&format!("{}/msg", base));
+        self.add_node(
+            &format!("{}/hostname", base),
+            Vnode::new_file("hostname", hostname.as_bytes().to_vec()),
+        );
+        self.add_node(
+            &format!("{}/ctl/status", base),
+            Vnode::new_ctl("status", "connected"),
+        );
+        self.add_node(
+            &format!("{}/ctl/capabilities", base),
+            Vnode::new_file("capabilities", b"[]".to_vec()),
+        );
+        self.add_node(
+            &format!("{}/msg/inbox", base),
+            Vnode::new_file("inbox", b"".to_vec()),
+        );
+        self.add_node(
+            &format!("{}/msg/outbox", base),
+            Vnode::new_file("outbox", b"".to_vec()),
+        );
     }
 
     pub fn unmount_agent_ns(&self, agent_id: &str) {
         let base = format!("/net/{}", agent_id);
+        let prefix = format!("{}/", base);
         let to_remove: Vec<String> = self
             .nodes
             .iter()
-            .filter(|e| e.key().starts_with(&base))
+            .filter(|e| {
+                let key = e.key();
+                key == &base || key.starts_with(&prefix)
+            })
             .map(|e| e.key().clone())
             .collect();
         for key in to_remove {
-            self.nodes.remove(&key);
+            if self.nodes.remove(&key).is_some() {
+                if let Some(parent) = parent_path(&key) {
+                    self.unlink_child(parent, &key);
+                }
+            }
         }
     }
 }
@@ -154,15 +200,14 @@ fn parent_path(path: &str) -> Option<String> {
 fn child_name(parent: &str, full: &str) -> Option<String> {
     let parent = normalize(parent);
     let full = normalize(full);
-    if full == parent || !full.starts_with(&parent) {
-        return None;
-    }
-    let remainder = &full[parent.len()..];
-    let remainder = remainder.strip_prefix('/').unwrap_or(remainder);
+    let remainder = if parent == "/" {
+        full.strip_prefix('/')?
+    } else {
+        full.strip_prefix(&parent)?.strip_prefix('/')?
+    };
     // Only direct children
-    if remainder.contains('/') {
+    if remainder.is_empty() || remainder.contains('/') {
         return None;
     }
     Some(remainder.to_string())
 }
-

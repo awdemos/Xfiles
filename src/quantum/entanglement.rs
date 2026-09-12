@@ -1,12 +1,23 @@
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Per-conversation endpoint pair -> correlation score.
+type CorrelationMap = DashMap<(String, String), f64>;
+
+/// Correlation state for a single conversation.
+#[derive(Debug, Clone, Default)]
+struct ConversationCorrelations {
+    map: CorrelationMap,
+    last_active: DateTime<Utc>,
+}
+
 /// Tracks correlations between endpoints within a conversation.
 #[derive(Debug, Clone, Default)]
 pub struct EntanglementTable {
-    /// conversation_id -> (endpoint_a, endpoint_b) -> correlation score [-1, 1]
-    correlations: Arc<DashMap<Uuid, DashMap<(String, String), f64>>>,
+    /// conversation_id -> correlation map
+    correlations: Arc<DashMap<Uuid, ConversationCorrelations>>,
 }
 
 impl EntanglementTable {
@@ -15,25 +26,34 @@ impl EntanglementTable {
     }
 
     /// Record that endpoint_a and endpoint_b were both used successfully in the same conversation.
-    pub fn record_pair(&self, conversation_id: Uuid, endpoint_a: &str, endpoint_b: &str, reward: f64) {
-        let conv_map = self
-            .correlations
-            .entry(conversation_id)
-            .or_default();
+    pub fn record_pair(
+        &self,
+        conversation_id: Uuid,
+        endpoint_a: &str,
+        endpoint_b: &str,
+        reward: f64,
+    ) {
+        let mut conv = self.correlations.entry(conversation_id).or_default();
+        conv.last_active = Utc::now();
 
         let key = Self::ordered_key(endpoint_a, endpoint_b);
-        let mut entry = conv_map.entry(key).or_insert(0.0);
+        let mut entry = conv.map.entry(key).or_insert(0.0);
         // Exponential moving average of correlation
         *entry = *entry * 0.9 + reward * 0.1;
     }
 
     /// Get the correlation between two endpoints in a conversation.
-    pub fn get_correlation(&self, conversation_id: Uuid, endpoint_a: &str, endpoint_b: &str) -> f64 {
+    pub fn get_correlation(
+        &self,
+        conversation_id: Uuid,
+        endpoint_a: &str,
+        endpoint_b: &str,
+    ) -> f64 {
         self.correlations
             .get(&conversation_id)
             .and_then(|conv| {
                 let key = Self::ordered_key(endpoint_a, endpoint_b);
-                conv.get(&key).map(|e| *e)
+                conv.map.get(&key).map(|e| *e)
             })
             .unwrap_or(0.0)
     }
@@ -46,7 +66,9 @@ impl EntanglementTable {
         distribution: &mut [(String, f64)],
         strength: f64,
     ) {
-        let Some(prev) = previous_endpoint else { return };
+        let Some(prev) = previous_endpoint else {
+            return;
+        };
         for (ep, prob) in distribution.iter_mut() {
             let corr = self.get_correlation(conversation_id, prev, ep);
             // Boost or suppress based on correlation
@@ -69,17 +91,16 @@ impl EntanglementTable {
         }
     }
 
-    pub fn prune_old(&self, max_age_conversations: usize) {
-        if self.correlations.len() > max_age_conversations {
-            let to_remove: Vec<Uuid> = self
-                .correlations
-                .iter()
-                .take(self.correlations.len() - max_age_conversations)
-                .map(|e| *e.key())
-                .collect();
-            for id in to_remove {
-                self.correlations.remove(&id);
-            }
+    pub fn prune_old(&self, max_age_secs: i64) {
+        let now = Utc::now();
+        let to_remove: Vec<Uuid> = self
+            .correlations
+            .iter()
+            .filter(|e| (now - e.last_active).num_seconds() > max_age_secs)
+            .map(|e| *e.key())
+            .collect();
+        for id in to_remove {
+            self.correlations.remove(&id);
         }
     }
 }

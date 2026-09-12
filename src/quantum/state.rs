@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -67,7 +68,7 @@ pub struct ConversationState {
     pub conversation_id: Uuid,
     pub endpoint_states: Arc<DashMap<String, EndpointState>>,
     pub created_at: DateTime<Utc>,
-    pub last_active: DateTime<Utc>,
+    pub last_active: Arc<Mutex<DateTime<Utc>>>,
 }
 
 impl ConversationState {
@@ -77,7 +78,7 @@ impl ConversationState {
             conversation_id,
             endpoint_states: Arc::new(DashMap::new()),
             created_at: now,
-            last_active: now,
+            last_active: Arc::new(Mutex::new(now)),
         }
     }
 
@@ -113,12 +114,18 @@ impl ConversationState {
             entry.amplitude.imag = target_mag * new_phase.sin();
         } // entry dropped here, releasing the shard lock
 
+        *self.last_active.lock() = now;
+
         // Apply decoherence: amplitudes decay toward uniform
         self.apply_decoherence(decoherence_rate);
     }
 
     fn apply_decoherence(&self, rate: f64) {
-        let entries: Vec<_> = self.endpoint_states.iter().map(|e| e.key().clone()).collect();
+        let entries: Vec<_> = self
+            .endpoint_states
+            .iter()
+            .map(|e| e.key().clone())
+            .collect();
         if entries.is_empty() {
             return;
         }
@@ -147,6 +154,9 @@ impl ConversationState {
         dist
     }
 }
+
+/// Diagnostic tuple for an endpoint within a conversation.
+pub type EndpointDiagnostic = (String, f64, u64, f64);
 
 /// Global quantum state manager.
 #[derive(Debug, Clone, Default)]
@@ -186,7 +196,7 @@ impl QuantumStateManager {
         let to_remove: Vec<Uuid> = self
             .conversations
             .iter()
-            .filter(|e| (now - e.last_active).num_seconds() > max_age_secs)
+            .filter(|e| (now - *e.last_active.lock()).num_seconds() > max_age_secs)
             .map(|e| *e.key())
             .collect();
         for id in to_remove {
@@ -198,12 +208,12 @@ impl QuantumStateManager {
         self.conversations.len()
     }
 
-    pub fn all_diagnostics(&self) -> Vec<(Uuid, Vec<(String, f64, u64, f64)>)> {
+    pub fn all_diagnostics(&self) -> Vec<(Uuid, Vec<EndpointDiagnostic>)> {
         self.conversations
             .iter()
             .map(|e| {
                 let conv = e.value();
-                let diag: Vec<(String, f64, u64, f64)> = conv
+                let diag: Vec<EndpointDiagnostic> = conv
                     .endpoint_states
                     .iter()
                     .map(|ep| {

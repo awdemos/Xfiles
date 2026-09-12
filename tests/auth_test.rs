@@ -18,15 +18,17 @@ async fn test_auth_allows_public_routes() {
         agent_token: None,
     });
 
-    let app = Router::new()
-        .route("/health", get(dummy_handler))
-        .layer(axum::middleware::from_fn_with_state(
-            auth_config.clone(),
-            xfiles::auth::api_key_middleware,
-        ));
+    let app = Router::new().route("/health", get(dummy_handler)).layer(
+        axum::middleware::from_fn_with_state(auth_config.clone(), xfiles::auth::api_key_middleware),
+    );
 
     let response = app
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -40,15 +42,17 @@ async fn test_auth_blocks_missing_key() {
         agent_token: None,
     });
 
-    let app = Router::new()
-        .route("/protected", get(dummy_handler))
-        .layer(axum::middleware::from_fn_with_state(
-            auth_config.clone(),
-            xfiles::auth::api_key_middleware,
-        ));
+    let app = Router::new().route("/protected", get(dummy_handler)).layer(
+        axum::middleware::from_fn_with_state(auth_config.clone(), xfiles::auth::api_key_middleware),
+    );
 
     let response = app
-        .oneshot(Request::builder().uri("/protected").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/protected")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
 
@@ -62,12 +66,9 @@ async fn test_auth_allows_valid_key() {
         agent_token: None,
     });
 
-    let app = Router::new()
-        .route("/protected", get(dummy_handler))
-        .layer(axum::middleware::from_fn_with_state(
-            auth_config.clone(),
-            xfiles::auth::api_key_middleware,
-        ));
+    let app = Router::new().route("/protected", get(dummy_handler)).layer(
+        axum::middleware::from_fn_with_state(auth_config.clone(), xfiles::auth::api_key_middleware),
+    );
 
     let response = app
         .oneshot(
@@ -81,4 +82,29 @@ async fn test_auth_allows_valid_key() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_auth_skips_preflight_options() {
+    let auth_config = Arc::new(xfiles::auth::AuthConfig {
+        api_key: Some("secret".into()),
+        agent_token: None,
+    });
+
+    let app = Router::new().route("/protected", get(dummy_handler)).layer(
+        axum::middleware::from_fn_with_state(auth_config.clone(), xfiles::auth::api_key_middleware),
+    );
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/protected")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_ne!(response.status(), StatusCode::UNAUTHORIZED);
 }

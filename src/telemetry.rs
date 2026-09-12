@@ -15,22 +15,31 @@ pub fn init_telemetry(service_name: &str) -> Option<()> {
         .tonic()
         .with_endpoint(otlp_endpoint.unwrap());
 
-    let tracer = opentelemetry_otlp::new_pipeline()
+    let tracer = match opentelemetry_otlp::new_pipeline()
         .tracing()
         .with_exporter(exporter)
-        .with_trace_config(
-            opentelemetry_sdk::trace::Config::default()
-                .with_resource(opentelemetry_sdk::Resource::new(vec![
-                    opentelemetry::KeyValue::new("service.name", service_name.to_string()),
-                ])),
-        )
+        .with_trace_config(opentelemetry_sdk::trace::Config::default().with_resource(
+            opentelemetry_sdk::Resource::new(vec![opentelemetry::KeyValue::new(
+                "service.name",
+                service_name.to_string(),
+            )]),
+        ))
         .install_batch(Tokio)
-        .expect("Failed to install OpenTelemetry tracer");
+    {
+        Ok(tracer) => tracer,
+        Err(err) => {
+            tracing::warn!("Failed to install OpenTelemetry tracer: {}", err);
+            return None;
+        }
+    };
 
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "xfiles=info".into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "xfiles=info".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .with(telemetry)
         .init();

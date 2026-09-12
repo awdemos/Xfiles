@@ -2,6 +2,7 @@ use crate::message::{CapabilityManifest, FeedbackEvent, Message, MessageResponse
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol envelope for WebSocket and HTTP transport.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum ProtocolOp {

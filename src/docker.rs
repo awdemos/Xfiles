@@ -16,7 +16,10 @@ pub struct DockerDiscovery {
 }
 
 impl DockerDiscovery {
-    pub fn new(endpoints: Arc<DashMap<String, AiEndpoint>>, config: DiscoveryConfig) -> anyhow::Result<Self> {
+    pub fn new(
+        endpoints: Arc<DashMap<String, AiEndpoint>>,
+        config: DiscoveryConfig,
+    ) -> anyhow::Result<Self> {
         let docker = Docker::connect_with_local_defaults()?;
         Ok(Self {
             docker,
@@ -61,14 +64,14 @@ impl DockerDiscovery {
 
         for container in containers {
             let labels = container.labels.unwrap_or_default();
-            
+
             // Look for xfiles labels
             if let Some(service_name) = labels.get("ai.xfiles.service") {
                 let service_type = labels
                     .get("ai.xfiles.type")
                     .cloned()
                     .unwrap_or_else(|| "api".to_string());
-                
+
                 let port = labels
                     .get("ai.xfiles.port")
                     .and_then(|p| p.parse::<u16>().ok())
@@ -117,9 +120,7 @@ impl DockerDiscovery {
         let to_remove: Vec<String> = self
             .endpoints
             .iter()
-            .filter(|e| {
-                e.tags.contains(&"docker".into()) && !found_ids.contains(&e.key().clone())
-            })
+            .filter(|e| e.tags.contains(&"docker".into()) && !found_ids.contains(&e.key().clone()))
             .map(|e| e.key().clone())
             .collect();
         for id in to_remove {

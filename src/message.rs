@@ -22,7 +22,11 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn new(sender: impl Into<String>, path: impl Into<String>, msg_type: impl Into<String>) -> Self {
+    pub fn new(
+        sender: impl Into<String>,
+        path: impl Into<String>,
+        msg_type: impl Into<String>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             parent_id: None,

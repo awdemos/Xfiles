@@ -103,8 +103,7 @@ pub async fn chat_completions_handler(
         .map(|m| m.content.clone())
         .unwrap_or_default();
 
-    let msg = Message::new("proxy", "/ai/inference", "llm_request")
-        .with_data(&req);
+    let msg = Message::new("proxy", "/ai/inference", "llm_request").with_data(&req);
 
     // Collect healthy endpoint candidates, respecting circuit breaker
     let candidates: Vec<String> = state
@@ -165,7 +164,12 @@ pub async fn chat_completions_handler(
         Err(e) => {
             // Observe failure
             if let Some(ref q) = state.quantum {
-                q.observe(msg.conversation_id, &endpoint_id, false, start.elapsed().as_millis() as u64);
+                q.observe(
+                    msg.conversation_id,
+                    &endpoint_id,
+                    false,
+                    start.elapsed().as_millis() as u64,
+                );
             }
             if let Some(ref c) = state.circuit {
                 c.record_failure(&endpoint_id);
@@ -183,8 +187,10 @@ pub async fn chat_completions_handler(
 
     // Observe success / circuit
     let success = status.is_success();
-    if let Some(ref q) = state.quantum {
-        q.observe(msg.conversation_id, &endpoint_id, success, latency);
+    if !req.stream {
+        if let Some(ref q) = state.quantum {
+            q.observe(msg.conversation_id, &endpoint_id, success, latency);
+        }
     }
     if let Some(ref c) = state.circuit {
         if success {
@@ -204,6 +210,7 @@ pub async fn chat_completions_handler(
             conversation_id: msg.conversation_id,
             endpoint_id: endpoint_id.clone(),
             observed: false,
+            success,
             start,
         };
         let body = Body::from_stream(observed_stream);
@@ -222,7 +229,8 @@ pub async fn chat_completions_handler(
                     obj.insert("xfiles_endpoint_id".into(), json!(endpoint_id));
                     obj.insert("xfiles_latency_ms".into(), json!(latency));
                 }
-                (StatusCode::OK, Json(json)).into_response()
+                let code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+                (code, Json(json)).into_response()
             }
             Err(e) => (
                 StatusCode::BAD_GATEWAY,
@@ -240,6 +248,7 @@ struct ObservingStream<S> {
     conversation_id: Uuid,
     endpoint_id: String,
     observed: bool,
+    success: bool,
     start: std::time::Instant,
 }
 
@@ -253,14 +262,14 @@ where
         let this = &mut *self;
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(None) => {
-                // Stream completed successfully
+                // Stream completed
                 if !this.observed {
                     this.observed = true;
                     if let Some(ref q) = this.quantum {
                         q.observe(
                             this.conversation_id,
                             &this.endpoint_id,
-                            true,
+                            this.success,
                             this.start.elapsed().as_millis() as u64,
                         );
                     }
@@ -287,9 +296,7 @@ where
 }
 
 /// GET /v1/models — list available models from all healthy endpoints.
-pub async fn list_models_handler(
-    State(state): State<Arc<ProxyState>>,
-) -> impl IntoResponse {
+pub async fn list_models_handler(State(state): State<Arc<ProxyState>>) -> impl IntoResponse {
     let mut models = Vec::new();
 
     for ep in state.endpoints.iter() {

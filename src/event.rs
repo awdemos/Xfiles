@@ -100,8 +100,8 @@ pub trait EventSink: Send + Sync {
     async fn write(&self, event: &Event) -> anyhow::Result<()>;
 }
 
-use std::sync::Arc;
 use crate::store::Store;
+use std::sync::Arc;
 
 /// Event sink that persists events to SQLite.
 pub struct StoreEventSink {
@@ -142,10 +142,14 @@ impl EventEmitter for TracingEventEmitter {
         }
 
         if let Some(ref sink) = self.sink {
-            let sink = sink.clone();
-            tokio::spawn(async move {
-                let _ = sink.write(&event).await;
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let sink = sink.clone();
+                handle.spawn(async move {
+                    if let Err(e) = sink.write(&event).await {
+                        tracing::warn!("failed to persist event {}: {}", event.id, e);
+                    }
+                });
+            }
         }
     }
 }

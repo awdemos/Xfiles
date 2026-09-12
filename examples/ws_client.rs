@@ -5,7 +5,6 @@
 ///
 /// This demonstrates connecting to an Xfiles hub, registering capabilities,
 /// sending messages, and reading virtual files.
-
 use clap::Parser;
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};

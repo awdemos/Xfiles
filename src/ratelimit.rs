@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
@@ -27,8 +27,8 @@ impl RateLimiter {
     pub fn new(max_requests: u64, window_secs: u64) -> Self {
         Self {
             buckets: Arc::new(DashMap::new()),
-            max_requests,
-            window_secs,
+            max_requests: max_requests.max(1),
+            window_secs: window_secs.max(1),
         }
     }
 
@@ -36,14 +36,18 @@ impl RateLimiter {
         let now = Instant::now();
         let window = Duration::from_secs(self.window_secs);
 
-        let mut entry = self.buckets.entry(key.to_string()).or_insert_with(|| TokenBucket {
-            tokens: self.max_requests,
-            last_refill: now,
-        });
+        let mut entry = self
+            .buckets
+            .entry(key.to_string())
+            .or_insert_with(|| TokenBucket {
+                tokens: self.max_requests,
+                last_refill: now,
+            });
 
         // Refill tokens based on elapsed time
         let elapsed = now.duration_since(entry.last_refill);
-        let refill = (elapsed.as_secs_f64() / window.as_secs_f64() * self.max_requests as f64) as u64;
+        let refill =
+            (elapsed.as_secs_f64() / window.as_secs_f64() * self.max_requests as f64) as u64;
         if refill > 0 {
             entry.tokens = (entry.tokens + refill).min(self.max_requests);
             entry.last_refill = now;
@@ -67,8 +71,8 @@ pub async fn rate_limit_middleware(
     // Extract client IP or fallback to path
     let key = request
         .extensions()
-        .get::<SocketAddr>()
-        .map(|addr| addr.to_string())
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|connect_info| connect_info.0.to_string())
         .unwrap_or_else(|| request.uri().path().to_string());
 
     if limiter.check(&key) {
