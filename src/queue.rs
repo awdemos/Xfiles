@@ -56,7 +56,7 @@ impl MessageQueue {
             }
             if entry.is_empty() {
                 drop(entry);
-                self.queues.remove(agent_id);
+                self.queues.remove_if(agent_id, |_, q| q.is_empty());
             }
         }
         if delivered > 0 {

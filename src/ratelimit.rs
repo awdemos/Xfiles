@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
@@ -27,8 +27,8 @@ impl RateLimiter {
     pub fn new(max_requests: u64, window_secs: u64) -> Self {
         Self {
             buckets: Arc::new(DashMap::new()),
-            max_requests,
-            window_secs,
+            max_requests: max_requests.max(1),
+            window_secs: window_secs.max(1),
         }
     }
 
@@ -71,8 +71,8 @@ pub async fn rate_limit_middleware(
     // Extract client IP or fallback to path
     let key = request
         .extensions()
-        .get::<SocketAddr>()
-        .map(|addr| addr.to_string())
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|connect_info| connect_info.0.to_string())
         .unwrap_or_else(|| request.uri().path().to_string());
 
     if limiter.check(&key) {

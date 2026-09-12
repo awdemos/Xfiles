@@ -2,6 +2,7 @@ use crate::ai::endpoints::AiEndpoint;
 use crate::message::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Model Context Protocol (MCP) tool definition.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -29,7 +30,10 @@ pub struct McpClient {
 impl McpClient {
     pub fn new(endpoint: AiEndpoint) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()
+                .unwrap_or_default(),
             endpoint,
         }
     }
@@ -37,7 +41,7 @@ impl McpClient {
     /// Discover tools from an MCP endpoint.
     pub async fn discover_tools(&self) -> anyhow::Result<Vec<McpTool>> {
         let url = format!("{}/mcp/tools", self.endpoint.url.trim_end_matches('/'));
-        let resp = self.http.get(&url).send().await?;
+        let resp = self.http.get(&url).send().await?.error_for_status()?;
         let manifest: McpManifest = resp.json().await?;
         Ok(manifest.tools)
     }
@@ -53,7 +57,13 @@ impl McpClient {
             self.endpoint.url.trim_end_matches('/'),
             tool_name
         );
-        let resp = self.http.post(&url).json(&arguments).send().await?;
+        let resp = self
+            .http
+            .post(&url)
+            .json(&arguments)
+            .send()
+            .await?
+            .error_for_status()?;
         let result: serde_json::Value = resp.json().await?;
         Ok(result)
     }

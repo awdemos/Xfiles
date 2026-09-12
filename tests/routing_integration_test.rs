@@ -157,3 +157,52 @@ async fn test_circuit_breaker_filters_unhealthy() {
         "offline endpoint should be filtered out"
     );
 }
+
+#[tokio::test]
+async fn test_circuit_breaker_filters_unhealthy_with_quantum_enabled() {
+    let endpoints = build_test_endpoints();
+
+    {
+        let mut ep = endpoints.get_mut("ep-a").unwrap();
+        ep.health.status = xfiles::ai::endpoints::HealthStatus::Offline;
+    }
+
+    let store = Arc::new(Store::new(":memory:").await.expect("create store"));
+    let quantum = Arc::new(xfiles::quantum::QuantumRouter::new(
+        endpoints.clone(),
+        QuantumConfig {
+            exploration_rate: 0.0,
+            decoherence_rate: 0.0,
+            ..Default::default()
+        },
+        store,
+    ));
+
+    // Bias quantum strongly toward the offline endpoint so a health-blind
+    // quantum stage would pick it.
+    let conv = uuid::Uuid::new_v4();
+    for _ in 0..5 {
+        quantum.observe(conv, "ep-a", true, 0);
+    }
+    quantum.observe(conv, "ep-b", false, 5000);
+
+    let circuit = Arc::new(CircuitBreaker::new(3, 60, 1));
+    let mcp = Arc::new(McpRegistry::new());
+    let plumber = Plumber::new();
+    plumber
+        .add_rule("ai", "llm_request", "ep-a", 1, None)
+        .unwrap();
+    plumber
+        .add_rule("ai", "llm_request", "ep-b", 1, None)
+        .unwrap();
+    let pipeline = default_pipeline(mcp, plumber, Some(quantum), Some(circuit), endpoints);
+
+    let msg = Message::new("test", "/ai", "llm_request").with_conversation(conv);
+    let decision = pipeline.route(&msg).await;
+
+    assert_eq!(
+        decision.selected,
+        Some("ep-b".into()),
+        "offline endpoint should be filtered out when quantum routing is enabled"
+    );
+}

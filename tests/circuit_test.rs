@@ -47,3 +47,16 @@ async fn test_circuit_half_open_then_reopens() {
     assert_eq!(cb.get_state("ep-1"), CircuitState::Open);
     assert!(!cb.allow("ep-1"));
 }
+
+#[tokio::test]
+async fn test_circuit_half_open_probe_count_enforced() {
+    let cb = CircuitBreaker::new(2, 1, 1);
+    cb.record_failure("ep-1");
+    cb.record_failure("ep-1");
+
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert!(cb.allow("ep-1"));
+    assert_eq!(cb.get_state("ep-1"), CircuitState::HalfOpen);
+    assert!(!cb.allow("ep-1"));
+    assert!(!cb.allow("ep-1"));
+}

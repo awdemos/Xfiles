@@ -19,9 +19,77 @@ fn test_vfs_mount_agent() {
 
     assert!(vfs.exists("/net/agent-01"));
     assert!(vfs.exists("/net/agent-01/hostname"));
+    assert!(vfs.exists("/net/agent-01/ctl"));
     assert!(vfs.exists("/net/agent-01/ctl/status"));
+    assert!(vfs.exists("/net/agent-01/msg"));
     assert!(vfs.exists("/net/agent-01/msg/inbox"));
     assert!(vfs.exists("/net/agent-01/msg/outbox"));
+}
+
+#[test]
+fn test_unmount_agent_ns_prefix_boundary() {
+    let vfs = VfsRegistry::new();
+    vfs.mount_agent_ns("agent-1", "host1");
+    vfs.mount_agent_ns("agent-10", "host10");
+
+    vfs.unmount_agent_ns("agent-1");
+
+    assert!(!vfs.exists("/net/agent-1"));
+    assert!(!vfs.exists("/net/agent-1/hostname"));
+    assert!(vfs.exists("/net/agent-10"));
+    assert!(vfs.exists("/net/agent-10/hostname"));
+    assert!(vfs.exists("/net/agent-10/ctl/status"));
+
+    let children = vfs.list("/net");
+    assert!(children.contains(&"agent-10".to_string()));
+    assert!(!children.contains(&"agent-1".to_string()));
+}
+
+#[test]
+fn test_vfs_listing_prefix_boundary() {
+    let vfs = VfsRegistry::new();
+    vfs.mount_agent_ns("agent-1", "host1");
+    vfs.mount_agent_ns("agent-10", "host10");
+
+    let children = vfs.list("/net/agent-1");
+    assert!(children.contains(&"hostname".to_string()));
+    assert!(children.contains(&"ctl".to_string()));
+    assert!(children.contains(&"msg".to_string()));
+    assert!(!children.contains(&"0".to_string()));
+
+    let net_children = vfs.list("/net");
+    assert_eq!(net_children.len(), 2);
+}
+
+#[test]
+fn test_remove_unlinks_child_from_parent() {
+    let vfs = VfsRegistry::new();
+    vfs.mount_agent_ns("agent-1", "host1");
+
+    vfs.remove("/net/agent-1/hostname");
+
+    let children = vfs.list("/net/agent-1");
+    assert!(!children.contains(&"hostname".to_string()));
+
+    // Full unmount must not leave phantom entries in the parent's listing
+    vfs.unmount_agent_ns("agent-1");
+    assert!(!vfs.list("/net").contains(&"agent-1".to_string()));
+}
+
+#[tokio::test]
+async fn test_dir_read_reflects_unmount() {
+    let vfs = VfsRegistry::new();
+    vfs.mount_agent_ns("agent-1", "host1");
+    vfs.mount_agent_ns("agent-10", "host10");
+
+    vfs.unmount_agent_ns("agent-1");
+
+    let net = vfs.get("/net").unwrap();
+    let data = net.read().await;
+    let listing = String::from_utf8_lossy(&data);
+    let entries: Vec<&str> = listing.lines().collect();
+    assert!(!entries.contains(&"agent-1"));
+    assert!(entries.contains(&"agent-10"));
 }
 
 #[tokio::test]

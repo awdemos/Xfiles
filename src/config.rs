@@ -140,14 +140,12 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         let config_path = std::env::var("XFILES_CONFIG").unwrap_or_else(|_| "xfiles.toml".into());
 
-        if std::path::Path::new(&config_path).exists() {
+        let mut cfg = if std::path::Path::new(&config_path).exists() {
             let contents = std::fs::read_to_string(&config_path)?;
-            let cfg: Config = toml::from_str(&contents)?;
-            return Ok(cfg);
-        }
-
-        // Fallback to defaults + env overrides
-        let mut cfg = Config::default();
+            toml::from_str(&contents)?
+        } else {
+            Config::default()
+        };
 
         if let Ok(bind) = std::env::var("XFILES_BIND") {
             cfg.hub.bind_addr = bind.parse()?;

@@ -1,8 +1,12 @@
 use crate::message::{FeedbackEvent, Message};
 use crate::quantum::state::EndpointState;
 use chrono::{DateTime, Utc};
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
+    Pool, Sqlite,
+};
 use std::collections::HashMap;
+use std::str::FromStr;
 
 /// SQLite-backed persistence layer for Xfiles.
 #[derive(Debug, Clone)]
@@ -12,9 +16,12 @@ pub struct Store {
 
 impl Store {
     pub async fn new(database_url: &str) -> anyhow::Result<Self> {
+        let connect_options = SqliteConnectOptions::from_str(database_url)?
+            .create_if_missing(true)
+            .journal_mode(SqliteJournalMode::Wal);
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(database_url)
+            .connect_with(connect_options)
             .await?;
 
         Self::run_migrations(&pool).await?;
@@ -327,7 +334,14 @@ impl TryFrom<MessageRow> for Message {
             sender_ns: row.sender_ns,
             path: row.path,
             msg_type: row.msg_type,
-            data: serde_json::from_str(&row.data).unwrap_or_default(),
+            data: serde_json::from_str(&row.data).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "failed to parse data for message {}: {}; defaulting to Null",
+                    row.id,
+                    e
+                );
+                serde_json::Value::Null
+            }),
             headers: serde_json::from_str(&row.headers).unwrap_or_default(),
             quantum: row.quantum.and_then(|q| serde_json::from_str(&q).ok()),
         })

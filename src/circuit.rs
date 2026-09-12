@@ -62,7 +62,7 @@ impl CircuitBreaker {
                 if let Some(last) = entry.last_failure {
                     if last.elapsed() >= self.recovery_timeout {
                         entry.state = CircuitState::HalfOpen;
-                        entry.half_open_calls = 0;
+                        entry.half_open_calls = 1;
                         tracing::info!("circuit half-open for endpoint {}", endpoint_id);
                         true
                     } else {

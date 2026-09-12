@@ -1,10 +1,24 @@
 use axum::{
     extract::{Request, State},
-    http::{header, StatusCode},
+    http::{header, Method, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use std::sync::Arc;
+
+/// Compare two tokens without early-exiting on the first differing byte.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
 
 /// Authentication configuration.
 #[derive(Debug, Clone, Default)]
@@ -30,6 +44,11 @@ pub async fn api_key_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    // CORS preflight requests carry no credentials
+    if request.method() == Method::OPTIONS {
+        return next.run(request).await;
+    }
+
     // Public routes
     let path = request.uri().path();
     if path == "/health" || path == "/metrics" || path.starts_with("/ws/") {
@@ -43,7 +62,7 @@ pub async fn api_key_middleware(
             .and_then(|h| h.to_str().ok());
 
         let valid = match auth_header {
-            Some(header) if header.starts_with("Bearer ") => header[7..] == *key,
+            Some(header) if header.starts_with("Bearer ") => constant_time_eq(&header[7..], key),
             _ => false,
         };
 
@@ -63,7 +82,7 @@ pub fn check_agent_token(config: &AuthConfig, headers: &axum::http::HeaderMap) -
             .and_then(|h| h.to_str().ok());
 
         match auth_header {
-            Some(header) if header.starts_with("Bearer ") => header[7..] == *token,
+            Some(header) if header.starts_with("Bearer ") => constant_time_eq(&header[7..], token),
             _ => false,
         }
     } else {

@@ -79,7 +79,9 @@ impl DiscoveryEngine {
             .endpoints
             .iter()
             .filter(|e| {
-                e.tags.contains(&"auto-discovered".into()) && !found_ids.contains(&e.key().clone())
+                e.tags.contains(&"auto-discovered".into())
+                    && !e.tags.contains(&"docker".into())
+                    && !found_ids.contains(&e.key().clone())
             })
             .map(|e| e.key().clone())
             .collect();

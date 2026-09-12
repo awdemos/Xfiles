@@ -267,12 +267,12 @@ pub fn default_pipeline(
     stages.push(Box::new(McpRoutingStage::new(mcp)));
     stages.push(Box::new(PlumberRoutingStage::new(plumber)));
 
-    if let Some(q) = quantum {
-        stages.push(Box::new(QuantumRoutingStage::new(q)));
-    }
-
     if let Some(c) = circuit {
         stages.push(Box::new(CircuitAwareStage::new(c, endpoints)));
+    }
+
+    if let Some(q) = quantum {
+        stages.push(Box::new(QuantumRoutingStage::new(q)));
     }
 
     stages.push(Box::new(FallbackRoutingStage));

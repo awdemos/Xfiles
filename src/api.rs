@@ -306,7 +306,9 @@ async fn send_message(
     let store = state.state_manager.store().clone();
     let msg_clone = msg.clone();
     tokio::spawn(async move {
-        let _ = store.insert_message(&msg_clone).await;
+        if let Err(e) = store.insert_message(&msg_clone).await {
+            tracing::warn!("failed to persist message: {}", e);
+        }
     });
 
     let decision = state.pipeline.route(&msg).await;
@@ -639,7 +641,9 @@ async fn quantum_feedback(
             let store = state.state_manager.store().clone();
             let fb_clone = feedback.clone();
             tokio::spawn(async move {
-                let _ = store.insert_feedback(&fb_clone).await;
+                if let Err(e) = store.insert_feedback(&fb_clone).await {
+                    tracing::warn!("failed to persist feedback: {}", e);
+                }
             });
             (
                 StatusCode::OK,

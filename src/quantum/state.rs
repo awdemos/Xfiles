@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -67,7 +68,7 @@ pub struct ConversationState {
     pub conversation_id: Uuid,
     pub endpoint_states: Arc<DashMap<String, EndpointState>>,
     pub created_at: DateTime<Utc>,
-    pub last_active: DateTime<Utc>,
+    pub last_active: Arc<Mutex<DateTime<Utc>>>,
 }
 
 impl ConversationState {
@@ -77,7 +78,7 @@ impl ConversationState {
             conversation_id,
             endpoint_states: Arc::new(DashMap::new()),
             created_at: now,
-            last_active: now,
+            last_active: Arc::new(Mutex::new(now)),
         }
     }
 
@@ -112,6 +113,8 @@ impl ConversationState {
             entry.amplitude.real = target_mag * new_phase.cos();
             entry.amplitude.imag = target_mag * new_phase.sin();
         } // entry dropped here, releasing the shard lock
+
+        *self.last_active.lock() = now;
 
         // Apply decoherence: amplitudes decay toward uniform
         self.apply_decoherence(decoherence_rate);
@@ -193,7 +196,7 @@ impl QuantumStateManager {
         let to_remove: Vec<Uuid> = self
             .conversations
             .iter()
-            .filter(|e| (now - e.last_active).num_seconds() > max_age_secs)
+            .filter(|e| (now - *e.last_active.lock()).num_seconds() > max_age_secs)
             .map(|e| *e.key())
             .collect();
         for id in to_remove {

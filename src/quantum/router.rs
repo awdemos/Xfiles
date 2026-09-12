@@ -1,7 +1,7 @@
 use crate::ai::endpoints::AiEndpoint;
 use crate::message::Message;
 use crate::quantum::entanglement::EntanglementTable;
-use crate::quantum::state::{EndpointDiagnostic, QuantumStateManager};
+use crate::quantum::state::{ConversationState, EndpointDiagnostic, QuantumStateManager};
 use dashmap::DashMap;
 use rand::distributions::WeightedIndex;
 use rand::prelude::*;
@@ -46,6 +46,14 @@ impl QuantumRouter {
 
     pub fn conversation_count(&self) -> usize {
         self.state.conversation_count()
+    }
+
+    pub fn conversation_state(&self, conversation_id: Uuid) -> Option<ConversationState> {
+        self.state.get(conversation_id)
+    }
+
+    pub fn last_endpoint_count(&self) -> usize {
+        self.last_endpoint.len()
     }
 
     pub fn all_diagnostics(&self) -> Vec<(Uuid, Vec<EndpointDiagnostic>)> {
@@ -151,7 +159,9 @@ impl QuantumRouter {
             let store = self.store.clone();
             let cid = conversation_id;
             tokio::spawn(async move {
-                let _ = store.save_quantum_state(cid, &ep, &cloned).await;
+                if let Err(e) = store.save_quantum_state(cid, &ep, &cloned).await {
+                    tracing::warn!("failed to persist quantum state for {}: {:#}", cid, e);
+                }
             });
         }
     }
@@ -192,6 +202,8 @@ impl QuantumRouter {
     pub fn tick(&self) {
         self.state.prune_old(3600); // Prune conversations older than 1 hour
         self.entanglement
-            .prune_old(self.config.entanglement_window * 2);
+            .prune_old((self.config.entanglement_window * 2) as i64);
+        self.last_endpoint
+            .retain(|k, _| self.state.get(*k).is_some());
     }
 }

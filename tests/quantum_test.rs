@@ -2,7 +2,7 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use xfiles::ai::endpoints::{AiEndpoint, EndpointType};
 use xfiles::config::QuantumConfig;
-use xfiles::quantum::QuantumRouter;
+use xfiles::quantum::{QuantumRouter, QuantumStateManager};
 use xfiles::store::Store;
 
 async fn create_test_store() -> Arc<Store> {
@@ -91,4 +91,54 @@ async fn test_quantum_empty_candidates_returns_none() {
     let selected = router.route(&msg, &[]);
 
     assert!(selected.is_none());
+}
+
+#[tokio::test]
+async fn test_update_bumps_conversation_last_active() {
+    let manager = QuantumStateManager::new();
+    let conv = uuid::Uuid::new_v4();
+    manager.update(conv, "ep-a", 1.0, 0.0);
+
+    let state = manager.get(conv).expect("conversation should exist");
+    {
+        let mut last_active = state.last_active.lock();
+        *last_active = chrono::Utc::now() - chrono::Duration::hours(2);
+    }
+
+    manager.update(conv, "ep-a", 1.0, 0.0);
+    manager.prune_old(3600);
+
+    assert!(
+        manager.get(conv).is_some(),
+        "recently active conversation should survive pruning"
+    );
+}
+
+#[tokio::test]
+async fn test_tick_prunes_stale_conversations_and_last_endpoints() {
+    let endpoints = build_test_endpoints();
+    let config = QuantumConfig::default();
+    let store = create_test_store().await;
+    let router = QuantumRouter::new(endpoints, config, store);
+
+    let msg = xfiles::message::Message::new("test", "/ai", "llm_request");
+    let candidates = vec!["ep-a".to_string(), "ep-b".to_string()];
+    router.route(&msg, &candidates);
+
+    assert_eq!(router.conversation_count(), 1);
+    assert_eq!(router.last_endpoint_count(), 1);
+
+    let state = router
+        .conversation_state(msg.conversation_id)
+        .expect("conversation should exist");
+    *state.last_active.lock() = chrono::Utc::now() - chrono::Duration::hours(2);
+
+    router.tick();
+
+    assert_eq!(router.conversation_count(), 0);
+    assert_eq!(
+        router.last_endpoint_count(),
+        0,
+        "tick should drop last_endpoint entries for pruned conversations"
+    );
 }

@@ -187,8 +187,10 @@ pub async fn chat_completions_handler(
 
     // Observe success / circuit
     let success = status.is_success();
-    if let Some(ref q) = state.quantum {
-        q.observe(msg.conversation_id, &endpoint_id, success, latency);
+    if !req.stream {
+        if let Some(ref q) = state.quantum {
+            q.observe(msg.conversation_id, &endpoint_id, success, latency);
+        }
     }
     if let Some(ref c) = state.circuit {
         if success {
@@ -208,6 +210,7 @@ pub async fn chat_completions_handler(
             conversation_id: msg.conversation_id,
             endpoint_id: endpoint_id.clone(),
             observed: false,
+            success,
             start,
         };
         let body = Body::from_stream(observed_stream);
@@ -226,7 +229,8 @@ pub async fn chat_completions_handler(
                     obj.insert("xfiles_endpoint_id".into(), json!(endpoint_id));
                     obj.insert("xfiles_latency_ms".into(), json!(latency));
                 }
-                (StatusCode::OK, Json(json)).into_response()
+                let code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+                (code, Json(json)).into_response()
             }
             Err(e) => (
                 StatusCode::BAD_GATEWAY,
@@ -244,6 +248,7 @@ struct ObservingStream<S> {
     conversation_id: Uuid,
     endpoint_id: String,
     observed: bool,
+    success: bool,
     start: std::time::Instant,
 }
 
@@ -257,14 +262,14 @@ where
         let this = &mut *self;
         match Pin::new(&mut this.inner).poll_next(cx) {
             Poll::Ready(None) => {
-                // Stream completed successfully
+                // Stream completed
                 if !this.observed {
                     this.observed = true;
                     if let Some(ref q) = this.quantum {
                         q.observe(
                             this.conversation_id,
                             &this.endpoint_id,
-                            true,
+                            this.success,
                             this.start.elapsed().as_millis() as u64,
                         );
                     }
